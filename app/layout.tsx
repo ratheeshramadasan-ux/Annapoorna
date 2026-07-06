@@ -1,33 +1,77 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
-export const metadata: Metadata = {
-  title: "Annapoorna",
-  description: "Homemade fresh tiffin service in Calgary NW.",
-};
+import React from 'react';
+import { usePathname } from 'next/navigation';
+import Header from '../components/Header';
+import Footer from '../components/Footer';
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
+  const pathname = usePathname();
+
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en">
+      <head>
+        <meta charSet="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Annapoorna</title>
+        <link rel="icon" href="/favicon.ico" />
+        <style jsx global>{`
+          body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+            color: #333;
+          }
+          .hero-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 2rem;
+            background-color: #1a1a1a;
+            border-bottom: 2px solid gold;
+          }
+          .hero-section img {
+            max-height: 300px;
+            margin-left: 2rem;
+          }
+          .hero-section h1 {
+            color: gold;
+            font-size: 2.5rem;
+            margin: 0;
+          }
+          .hero-section p {
+            color: #fff;
+            font-size: 1.2rem;
+            margin: 0;
+          }
+          @media (max-width: 768px) {
+            .hero-section img {
+              max-height: 200px;
+            }
+            .hero-section h1 {
+              font-size: 2rem;
+            }
+            .hero-section p {
+              font-size: 1rem;
+            }
+          }
+        `}</style>
+      </head>
+      <body>
+        <Header />
+        {pathname === '/' && (
+          <div className="hero-section">
+            <h1>Welcome to Annapoorna</h1>
+            <p>Enjoy delicious meals with us!</p>
+            <img src="/public/assets/brand-mark.jpg" alt="Brand Mark" />
+          </div>
+        )}
+        {children}
+        <Footer />
+      </body>
     </html>
   );
 }
