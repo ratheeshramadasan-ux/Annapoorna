@@ -27,8 +27,10 @@ DROP TABLE IF EXISTS order_status_history;
 DROP TABLE IF EXISTS order_item_preferences;
 DROP TABLE IF EXISTS order_items;
 DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS order_date_change_requests;
 DROP TABLE IF EXISTS pickup_slot_overrides;
 DROP TABLE IF EXISTS pickup_slots;
+DROP TABLE IF EXISTS holidays;
 DROP TABLE IF EXISTS order_pricing_adjustments;
 DROP TABLE IF EXISTS pricing_rules;
 DROP TABLE IF EXISTS menu_item_daily_capacity;
@@ -371,6 +373,17 @@ CREATE TABLE pickup_slot_overrides (
   FOREIGN KEY (pickup_slot_id) REFERENCES pickup_slots(id)
 );
 
+CREATE TABLE holidays (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  holiday_date TEXT NOT NULL,
+  end_date TEXT,
+  notice_message TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   order_number TEXT NOT NULL UNIQUE,
@@ -465,6 +478,19 @@ CREATE TABLE order_status_history (
   note TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (order_id) REFERENCES orders(id)
+);
+
+CREATE TABLE order_date_change_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL,
+  customer_id INTEGER NOT NULL,
+  old_selected_days TEXT,
+  requested_selected_days TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (order_id) REFERENCES orders(id),
+  FOREIGN KEY (customer_id) REFERENCES customers(id)
 );
 
 CREATE TABLE order_pricing_adjustments (

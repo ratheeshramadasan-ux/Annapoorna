@@ -146,6 +146,16 @@ export type PickupSlot = {
   sort_order: number;
 };
 
+export type Holiday = {
+  id: number;
+  name: string;
+  holiday_date: string;
+  end_date: string | null;
+  notice_message: string | null;
+  is_active: number;
+  created_at: string;
+};
+
 export type Order = {
   id: number;
   order_number: string;

@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   clearAdminSession,
   clearCustomerSession,
+  getCustomerSession,
   requireAdminSession,
   setAdminSession,
   setCustomerSession,
@@ -109,6 +111,86 @@ function normalizePhone(value: string) {
   return value.replace(/[^\d+]/g, "");
 }
 
+function dateFromValue(dateValue: string) {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function addDaysToValue(dateValue: string, daysToAdd: number) {
+  const date = dateFromValue(dateValue);
+  date.setDate(date.getDate() + daysToAdd);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function validatePlanDates(
+  orderType: OrderType,
+  selectedStartDate: string,
+  selectedDays: string | null,
+) {
+  if (orderType !== "weekly" && orderType !== "monthly") {
+    return;
+  }
+  const selected = (selectedDays ?? "")
+    .split(",")
+    .map((day) => day.trim())
+    .filter(Boolean);
+  const maxDays = orderType === "weekly" ? 5 : 20;
+  const endDate = addDaysToValue(selectedStartDate, orderType === "weekly" ? 13 : 39);
+  if (selected.length === 0) {
+    throw new Error("Please choose delivery dates for this thali plan.");
+  }
+  if (selected.length > maxDays) {
+    throw new Error(`${orderType === "weekly" ? "Weekly" : "Monthly"} thali allows up to ${maxDays} weekdays.`);
+  }
+  for (const dateValue of selected) {
+    const date = dateFromValue(dateValue);
+    const day = date.getDay();
+    if (dateValue < selectedStartDate || dateValue > endDate || day === 0 || day === 6) {
+      throw new Error("Selected plan dates must be weekdays inside the plan window.");
+    }
+  }
+}
+
+async function activeHolidayForDate(db: D1DatabaseLike, dateValue: string) {
+  return db
+    .prepare(
+      `SELECT id, name, holiday_date, end_date, notice_message
+       FROM holidays
+       WHERE is_active = 1
+         AND holiday_date <= ?
+         AND COALESCE(end_date, holiday_date) >= ?
+       ORDER BY holiday_date ASC
+       LIMIT 1`,
+    )
+    .bind(dateValue, dateValue)
+    .first<{
+      id: number;
+      name: string;
+      holiday_date: string;
+      end_date: string | null;
+      notice_message: string | null;
+    }>();
+}
+
+async function validateHolidayDates(
+  db: D1DatabaseLike,
+  selectedStartDate: string,
+  selectedDays: string | null,
+) {
+  const dates = [selectedStartDate, ...(selectedDays ?? "").split(",")]
+    .map((date) => date.trim())
+    .filter(Boolean);
+  for (const date of new Set(dates)) {
+    const holiday = await activeHolidayForDate(db, date);
+    if (holiday) {
+      throw new Error(`${holiday.name} is blocked for ordering on ${date}. Please choose another date.`);
+    }
+  }
+}
+
 async function refreshCustomerRollup(db: D1DatabaseLike, customerId: number) {
   await db
     .prepare(
@@ -204,6 +286,40 @@ async function runOptionalMutation(
   }
 }
 
+const defaultCustomerOrderMessage = [
+  "Hi {customer_name},",
+  "",
+  "Your Annapoorna order {order_number} has been received for {date}.",
+  "Track your order here: {link}",
+  "",
+  "{admin_signature}",
+].join("\n");
+
+const defaultAdminOrderMessage = [
+  "New Annapoorna order {order_number}",
+  "Customer: {customer_name}",
+  "Date: {date}",
+  "Link: {link}",
+  "",
+  "{admin_signature}",
+].join("\n");
+
+function renderOrderNotificationTemplate(
+  template: string | undefined,
+  fallback: string,
+  fields: Record<string, string>,
+) {
+  const source = template?.trim() || fallback;
+  const replacements: Record<string, string> = {
+    ...fields,
+    signature: fields.admin_signature ?? "",
+  };
+  return source.replace(/\{([a-z_]+)\}/gi, (match, key: string) => {
+    const value = replacements[key.toLowerCase()];
+    return value ?? match;
+  });
+}
+
 async function queueAdminNewOrderWhatsApp(
   db: D1DatabaseLike,
   settings: Record<string, string>,
@@ -260,14 +376,20 @@ async function queueAdminNewOrderWhatsApp(
 
   const totalText = `$${(order.totalCents / 100).toFixed(2)}`;
   const contact = [order.customerPhone, order.customerEmail].filter(Boolean).join(" / ");
-  const message = [
-    `New Annapoorna order ${order.orderNumber}`,
-    `Customer: ${order.customerName}`,
-    `Contact: ${contact}`,
-    `Pickup: ${order.pickupDate} ${order.pickupTime}`,
-    `Total: ${totalText}`,
-    "Please review it in /admin/orders.",
-  ].join("\n");
+  const adminUrl = `${await currentOrigin()}/admin/orders`;
+  const message = renderOrderNotificationTemplate(
+    settings.order_admin_message_template,
+    defaultAdminOrderMessage,
+    {
+      admin_signature: settings.portal_admin_signature ?? "",
+      contact,
+      customer_name: order.customerName,
+      date: `${order.pickupDate} ${order.pickupTime}`.trim(),
+      link: adminUrl,
+      order_number: order.orderNumber,
+      total: totalText,
+    },
+  );
 
   for (const recipient of recipients) {
     await db
@@ -285,6 +407,185 @@ async function queueAdminNewOrderWhatsApp(
         message,
       )
       .run();
+  }
+}
+
+async function currentOrigin() {
+  const headerStore = await headers();
+  const protocol = headerStore.get("x-forwarded-proto") ?? "http";
+  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host");
+  return host ? `${protocol}://${host}` : "http://localhost:3000";
+}
+
+async function queueCustomerOrderTrackingNotifications(
+  db: D1DatabaseLike,
+  settings: Record<string, string>,
+  order: {
+    id: number;
+    orderNumber: string;
+    customerId: number;
+    customerName: string;
+    customerPhone: string;
+    customerEmail: string | null;
+    pickupDate: string;
+    pickupTime: string;
+    status: string;
+  },
+) {
+  const trackUrl = `${await currentOrigin()}/track-order?order=${encodeURIComponent(
+    order.orderNumber,
+  )}&found=1`;
+  const message = renderOrderNotificationTemplate(
+    settings.order_customer_message_template,
+    defaultCustomerOrderMessage,
+    {
+      admin_signature: settings.portal_admin_signature ?? "",
+      customer_name: order.customerName,
+      date: `${order.pickupDate} ${order.pickupTime}`.trim(),
+      link: trackUrl,
+      order_number: order.orderNumber,
+      status: order.status,
+    },
+  );
+  const notifications: Array<{ channel: "email" | "whatsapp"; recipient: string; subject: string }> = [];
+
+  if (order.customerEmail) {
+    notifications.push({
+      channel: "email",
+      recipient: order.customerEmail,
+      subject: `Annapoorna order ${order.orderNumber}`,
+    });
+  }
+  if (order.customerPhone) {
+    notifications.push({
+      channel: "whatsapp",
+      recipient: normalizePhone(order.customerPhone),
+      subject: `Annapoorna order ${order.orderNumber}`,
+    });
+  }
+
+  for (const notification of notifications) {
+    await db
+      .prepare(
+        `INSERT INTO notifications
+         (notification_type, channel, recipient_type, recipient_value, customer_id, order_id, subject, message, status)
+         VALUES ('order_tracking_link', ?, 'customer', ?, ?, ?, ?, ?, 'pending')`,
+      )
+      .bind(
+        notification.channel,
+        notification.recipient,
+        order.customerId,
+        order.id,
+        notification.subject,
+        message,
+      )
+      .run();
+  }
+}
+
+function datesOverlap(startA: string, endA: string, startB: string, endB: string) {
+  return startA <= endB && startB <= endA;
+}
+
+async function affectedOrdersForHoliday(
+  db: D1DatabaseLike,
+  startDate: string,
+  endDate: string,
+) {
+  const result = await db
+    .prepare(
+      `SELECT id, order_number, customer_id, customer_name, customer_email, customer_phone,
+              pickup_date, pickup_time, selected_days, total_cents, payment_status, status
+       FROM orders
+       WHERE status NOT IN ('cancelled')
+         AND (
+           pickup_date BETWEEN ? AND ?
+           OR selected_days IS NOT NULL
+         )
+       ORDER BY pickup_date ASC, created_at ASC`,
+    )
+    .bind(startDate, endDate)
+    .all<{
+      id: number;
+      order_number: string;
+      customer_id: number | null;
+      customer_name: string;
+      customer_email: string | null;
+      customer_phone: string;
+      pickup_date: string;
+      pickup_time: string;
+      selected_days: string | null;
+      total_cents: number;
+      payment_status: string;
+      status: string;
+    }>();
+
+  return (result.results ?? []).filter((order) => {
+    if (datesOverlap(order.pickup_date, order.pickup_date, startDate, endDate)) {
+      return true;
+    }
+    return (order.selected_days ?? "")
+      .split(",")
+      .map((date) => date.trim())
+      .filter(Boolean)
+      .some((date) => date >= startDate && date <= endDate);
+  });
+}
+
+async function queueHolidayNotices(
+  db: D1DatabaseLike,
+  holiday: {
+    name: string;
+    holidayDate: string;
+    endDate: string;
+    noticeMessage: string | null;
+  },
+) {
+  const orders = await affectedOrdersForHoliday(db, holiday.holidayDate, holiday.endDate);
+  const dateText =
+    holiday.holidayDate === holiday.endDate
+      ? holiday.holidayDate
+      : `${holiday.holidayDate} to ${holiday.endDate}`;
+
+  for (const order of orders) {
+    const trackUrl = `${await currentOrigin()}/track-order?order=${encodeURIComponent(
+      order.order_number,
+    )}&found=1`;
+    const message =
+      holiday.noticeMessage?.trim() ||
+      [
+        `Hi ${order.customer_name},`,
+        "",
+        `Annapoorna is closed for ${holiday.name} on ${dateText}. Your booking ${order.order_number} may be affected.`,
+        `Track your order here: ${trackUrl}`,
+        "",
+        "Regards,",
+        "Team Annapoorna",
+      ].join("\n");
+    const recipients: Array<{ channel: "email" | "whatsapp"; value: string }> = [];
+    if (order.customer_email) {
+      recipients.push({ channel: "email", value: order.customer_email });
+    }
+    if (order.customer_phone) {
+      recipients.push({ channel: "whatsapp", value: normalizePhone(order.customer_phone) });
+    }
+    for (const recipient of recipients) {
+      await db
+        .prepare(
+          `INSERT INTO notifications
+           (notification_type, channel, recipient_type, recipient_value, customer_id, order_id, subject, message, status)
+           VALUES ('holiday_notice', ?, 'customer', ?, ?, ?, ?, ?, 'pending')`,
+        )
+        .bind(
+          recipient.channel,
+          recipient.value,
+          order.customer_id,
+          order.id,
+          `Annapoorna holiday notice for ${order.order_number}`,
+          message,
+        )
+        .run();
+    }
   }
 }
 
@@ -462,6 +763,9 @@ export async function submitOrder(formData: FormData) {
   const allergyNotes = optionalString(formData, "allergy_notes");
   const submissionToken = optionalString(formData, "submission_token");
 
+  validatePlanDates(orderType, selectedStartDate, selectedDays);
+  await validateHolidayDates(db, selectedStartDate, selectedDays);
+
   if (submissionToken) {
     const existingSubmission = await db
       .prepare("SELECT id, order_number FROM orders WHERE submission_token = ? LIMIT 1")
@@ -509,11 +813,15 @@ export async function submitOrder(formData: FormData) {
   if (!sameDay) {
     const today = new Date().toISOString().slice(0, 10);
     if (selectedStartDate <= today) {
-      throw new Error("Same-day ordering is not available.");
+      redirect("/order?error=Same-day%20ordering%20is%20not%20available.");
     }
   }
   if (pickupDateTime.getTime() - Date.now() < cutoffHours * 60 * 60 * 1000) {
-    throw new Error(`Orders must be placed at least ${cutoffHours} hours before pickup.`);
+    redirect(
+      `/order?error=${encodeURIComponent(
+        `Orders must be placed at least ${cutoffHours} hours before pickup. Please choose a later pickup date.`,
+      )}`,
+    );
   }
 
   const items = await db
@@ -761,6 +1069,21 @@ export async function submitOrder(formData: FormData) {
     });
   } catch {
     // Do not block customer checkout if the admin notification queue fails.
+  }
+  try {
+    await queueCustomerOrderTrackingNotifications(db, settings, {
+      id: orderId,
+      orderNumber: createdOrderNumber,
+      customerId,
+      customerName,
+      customerPhone,
+      customerEmail,
+      pickupDate: selectedStartDate,
+      pickupTime,
+      status: customerFacingStatus,
+    });
+  } catch {
+    // Do not block checkout if the customer notification queue fails.
   }
 
   revalidatePath("/admin/orders");
@@ -1361,6 +1684,31 @@ async function addMenuPriceFromForm(
     return;
   }
   const db = await requireDb();
+  const priceCents = Math.round(value * 100);
+  const current = await db
+    .prepare(
+      `SELECT id, price_cents, effective_from
+       FROM menu_prices
+       WHERE menu_item_id = ? AND price_type = ? AND active = 1 AND effective_to IS NULL
+       ORDER BY effective_from DESC, id DESC
+       LIMIT 1`,
+    )
+    .bind(menuItemId, priceType)
+    .first<{ id: number; price_cents: number; effective_from: string }>();
+  if (current?.effective_from === effectiveFrom) {
+    await db
+      .prepare(
+        `UPDATE menu_prices
+         SET price_cents = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .bind(priceCents, current.id)
+      .run();
+    return;
+  }
+  if (current?.price_cents === priceCents) {
+    return;
+  }
   await db
     .prepare(
       `UPDATE menu_prices
@@ -1375,7 +1723,7 @@ async function addMenuPriceFromForm(
        (menu_item_id, price_type, price_cents, effective_from, active)
        VALUES (?, ?, ?, ?, 1)`,
     )
-    .bind(menuItemId, priceType, Math.round(value * 100), effectiveFrom)
+    .bind(menuItemId, priceType, priceCents, effectiveFrom)
     .run();
 }
 
@@ -1697,6 +2045,232 @@ export async function updateAdminAlertSettings(formData: FormData) {
   redirect("/admin/settings?saved=alerts");
 }
 
+export async function updateOrderNotificationSettings(formData: FormData) {
+  await requireAdminSession();
+  const db = await requireDb();
+  const settings = [
+    [
+      "order_customer_message_template",
+      String(formData.get("order_customer_message_template") ?? ""),
+      "text",
+      "Message sent to customers after an order is placed.",
+    ],
+    [
+      "order_admin_message_template",
+      String(formData.get("order_admin_message_template") ?? ""),
+      "text",
+      "Message sent to admins after an order is placed.",
+    ],
+    [
+      "portal_admin_signature",
+      String(formData.get("portal_admin_signature") ?? ""),
+      "text",
+      "Reusable signature for portal notifications.",
+    ],
+  ];
+
+  for (const [key, value, type, description] of settings) {
+    await db
+      .prepare(
+        `INSERT INTO app_settings (key, value, value_type, category, description, is_public)
+         VALUES (?, ?, ?, 'notifications', ?, 0)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .bind(key, value, type, description)
+      .run();
+  }
+
+  revalidatePath("/admin/settings");
+  redirect("/admin/settings?saved=order-messages");
+}
+
+export async function createHoliday(formData: FormData) {
+  await requireAdminSession();
+  await ensureKitchenSchema();
+  const db = await requireDb();
+  const name = requiredString(formData, "name");
+  const holidayDate = requiredString(formData, "holiday_date");
+  const endDate = optionalString(formData, "end_date") ?? holidayDate;
+  if (endDate < holidayDate) {
+    throw new Error("Holiday end date cannot be before the start date.");
+  }
+  const noticeMessage = optionalString(formData, "notice_message");
+  const isActive = formData.get("is_active") === "on" ? 1 : 0;
+  const result = await db
+    .prepare(
+      `INSERT INTO holidays (name, holiday_date, end_date, notice_message, is_active)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(name, holidayDate, endDate, noticeMessage, isActive)
+    .run();
+
+  if (formData.get("send_notice") === "on" && isActive === 1) {
+    try {
+      await queueHolidayNotices(db, { name, holidayDate, endDate, noticeMessage });
+    } catch {
+      // Holiday creation should not fail if the notification queue has an issue.
+    }
+  }
+
+  revalidatePath("/admin/holidays");
+  revalidatePath("/order");
+  redirect(`/admin/holidays?saved=created&holiday=${result.meta.last_row_id ?? ""}`);
+}
+
+export async function updateHoliday(formData: FormData) {
+  await requireAdminSession();
+  await ensureKitchenSchema();
+  const db = await requireDb();
+  const holidayId = Number(requiredString(formData, "holiday_id"));
+  const name = requiredString(formData, "name");
+  const holidayDate = requiredString(formData, "holiday_date");
+  const endDate = optionalString(formData, "end_date") ?? holidayDate;
+  if (endDate < holidayDate) {
+    throw new Error("Holiday end date cannot be before the start date.");
+  }
+  const noticeMessage = optionalString(formData, "notice_message");
+  const isActive = formData.get("is_active") === "on" ? 1 : 0;
+  await db
+    .prepare(
+      `UPDATE holidays
+       SET name = ?,
+           holiday_date = ?,
+           end_date = ?,
+           notice_message = ?,
+           is_active = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .bind(name, holidayDate, endDate, noticeMessage, isActive, holidayId)
+    .run();
+
+  if (formData.get("send_notice") === "on" && isActive === 1) {
+    try {
+      await queueHolidayNotices(db, { name, holidayDate, endDate, noticeMessage });
+    } catch {
+      // Holiday updates should not fail if notification queueing has an issue.
+    }
+  }
+
+  revalidatePath("/admin/holidays");
+  revalidatePath("/order");
+  redirect(`/admin/holidays?saved=updated&holiday=${holidayId}`);
+}
+
+export async function refundHolidayOrder(formData: FormData) {
+  await requireAdminSession();
+  await ensureKitchenSchema();
+  const db = await requireDb();
+  const holidayId = Number(requiredString(formData, "holiday_id"));
+  const orderId = Number(requiredString(formData, "order_id"));
+  const refundCents = Math.max(
+    0,
+    Math.round(Number(formData.get("refund_amount") ?? 0) * 100),
+  );
+  const order = await db
+    .prepare(
+      `SELECT id, order_number, customer_id, customer_name, customer_email, customer_phone,
+              total_cents, payment_status
+       FROM orders
+       WHERE id = ?`,
+    )
+    .bind(orderId)
+    .first<{
+      id: number;
+      order_number: string;
+      customer_id: number | null;
+      customer_name: string;
+      customer_email: string | null;
+      customer_phone: string;
+      total_cents: number;
+      payment_status: string;
+    }>();
+  if (!order) {
+    throw new Error("Order not found.");
+  }
+  const holiday = await db
+    .prepare("SELECT name, holiday_date, end_date FROM holidays WHERE id = ?")
+    .bind(holidayId)
+    .first<{ name: string; holiday_date: string; end_date: string | null }>();
+  if (!holiday) {
+    throw new Error("Holiday not found.");
+  }
+
+  const nextStatus = refundCents >= order.total_cents ? "refunded" : "partially_refunded";
+  await db
+    .prepare(
+      `UPDATE orders
+       SET payment_status = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .bind(nextStatus, order.id)
+    .run();
+
+  if (order.customer_id) {
+    await db
+      .prepare(
+        `INSERT INTO payments
+         (order_id, customer_id, payment_method, payment_status, expected_amount_cents,
+          received_amount_cents, payment_reference, notes)
+         VALUES (?, ?, 'holiday_refund', 'refunded', ?, ?, ?, ?)`,
+      )
+      .bind(
+        order.id,
+        order.customer_id,
+        order.total_cents,
+        refundCents,
+        `holiday-${holidayId}`,
+        `Refund for ${holiday.name}`,
+      )
+      .run();
+    await refreshCustomerRollup(db, order.customer_id);
+  }
+
+  const dateText =
+    holiday.holiday_date === (holiday.end_date ?? holiday.holiday_date)
+      ? holiday.holiday_date
+      : `${holiday.holiday_date} to ${holiday.end_date}`;
+  const message = [
+    `Hi ${order.customer_name},`,
+    "",
+    `A refund of ${(refundCents / 100).toFixed(2)} has been recorded for order ${order.order_number} because Annapoorna is closed for ${holiday.name} on ${dateText}.`,
+    "",
+    "Regards,",
+    "Team Annapoorna",
+  ].join("\n");
+  const recipients: Array<{ channel: "email" | "whatsapp"; value: string }> = [];
+  if (order.customer_email) {
+    recipients.push({ channel: "email", value: order.customer_email });
+  }
+  if (order.customer_phone) {
+    recipients.push({ channel: "whatsapp", value: normalizePhone(order.customer_phone) });
+  }
+  for (const recipient of recipients) {
+    await db
+      .prepare(
+        `INSERT INTO notifications
+         (notification_type, channel, recipient_type, recipient_value, customer_id, order_id, subject, message, status)
+         VALUES ('holiday_refund', ?, 'customer', ?, ?, ?, ?, ?, 'pending')`,
+      )
+      .bind(
+        recipient.channel,
+        recipient.value,
+        order.customer_id,
+        order.id,
+        `Refund recorded for ${order.order_number}`,
+        message,
+      )
+      .run();
+  }
+
+  revalidatePath("/admin/holidays");
+  revalidatePath("/admin/orders");
+  revalidatePath("/admin/payments");
+  revalidatePath("/admin/customers");
+  redirect(`/admin/holidays?saved=refund&holiday=${holidayId}`);
+}
+
 export async function addInventoryItem(formData: FormData) {
   await requireAdminSession();
   const db = await requireDb();
@@ -1819,35 +2393,33 @@ export async function addThaliPlan(formData: FormData) {
 export async function recordPayment(formData: FormData) {
   await requireAdminSession();
   const db = await requireDb();
-  const orderId = Number(requiredString(formData, "order_id"));
+  const orderIdValue = optionalString(formData, "order_id");
+  const orderId = orderIdValue ? Number(orderIdValue) : null;
   const status = requiredString(formData, "payment_status");
   const amountCents = Math.round(Number(formData.get("received_amount") ?? 0) * 100);
-  const order = await db
-    .prepare(
-      `SELECT customer_id, customer_name, customer_email, customer_phone, total_cents
-       FROM orders
-       WHERE id = ?`,
-    )
-    .bind(orderId)
-    .first<{
-      customer_id: number | null;
-      customer_name: string;
-      customer_email: string | null;
-      customer_phone: string;
-      total_cents: number;
-    }>();
-  if (!order) {
-    throw new Error("Order not found.");
-  }
-  const customerId =
-    order.customer_id ??
-    (await upsertCustomerForOrder(
-      db,
-      order.customer_name,
-      order.customer_email,
-      order.customer_phone,
-    ));
-  if (!order.customer_id) {
+  const paymentDate = optionalString(formData, "payment_date") ?? new Date().toISOString().slice(0, 10);
+  const paymentCreatedAt = `${paymentDate} 12:00:00`;
+  const order = orderId
+    ? await db
+        .prepare(
+          `SELECT customer_id, customer_name, customer_email, customer_phone, total_cents
+           FROM orders
+           WHERE id = ?`,
+        )
+        .bind(orderId)
+        .first<{
+          customer_id: number | null;
+          customer_name: string;
+          customer_email: string | null;
+          customer_phone: string;
+          total_cents: number;
+        }>()
+    : null;
+  const customerName = order?.customer_name ?? requiredString(formData, "customer_name");
+  const customerEmail = order?.customer_email ?? optionalString(formData, "customer_email");
+  const customerPhone = order?.customer_phone ?? requiredString(formData, "customer_phone");
+  const customerId = order?.customer_id ?? (await upsertCustomerForOrder(db, customerName, customerEmail, customerPhone));
+  if (orderId && !order?.customer_id) {
     await db
       .prepare("UPDATE orders SET customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .bind(customerId, orderId)
@@ -1857,28 +2429,80 @@ export async function recordPayment(formData: FormData) {
     .prepare(
       `INSERT INTO payments
        (order_id, customer_id, payment_method, payment_status, expected_amount_cents,
-        received_amount_cents, payment_reference, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        received_amount_cents, payment_reference, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       orderId,
       customerId,
       requiredString(formData, "payment_method"),
       status,
-      order.total_cents,
+      order?.total_cents ?? amountCents,
       amountCents,
       optionalString(formData, "payment_reference"),
       optionalString(formData, "notes"),
+      paymentCreatedAt,
+      paymentCreatedAt,
     )
     .run();
-  await db
-    .prepare("UPDATE orders SET payment_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-    .bind(status, orderId)
-    .run();
+  if (orderId) {
+    await db
+      .prepare("UPDATE orders SET payment_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .bind(status, orderId)
+      .run();
+  }
   await refreshCustomerRollup(db, customerId);
   revalidatePath("/admin/payments");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/customers");
+}
+
+export async function requestPickupDateChange(formData: FormData) {
+  const customer = await getCustomerSession();
+  if (!customer) {
+    redirect("/account/register?reason=manage-dates");
+  }
+  await ensureKitchenSchema();
+  const db = await requireDb();
+  const orderId = Number(requiredString(formData, "order_id"));
+  const selectedDays = formData.getAll("selected_days").map(String).filter(Boolean).sort();
+  const order = await db
+    .prepare(
+      `SELECT id, order_type, selected_days
+       FROM orders
+       WHERE id = ? AND customer_id = ?`,
+    )
+    .bind(orderId, customer.id)
+    .first<{ id: number; order_type: string; selected_days: string | null }>();
+  if (!order || (order.order_type !== "weekly" && order.order_type !== "monthly")) {
+    throw new Error("Only weekly and monthly orders can change pickup dates.");
+  }
+  const maxDays = order.order_type === "weekly" ? 5 : 20;
+  if (selectedDays.length === 0 || selectedDays.length > maxDays) {
+    throw new Error(`Please choose up to ${maxDays} pickup dates.`);
+  }
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const cutoff = tomorrow.toISOString().slice(0, 10);
+  if (selectedDays.some((day) => day <= cutoff)) {
+    throw new Error("Pickup date changes must be requested at least one day before pickup.");
+  }
+  await db
+    .prepare(
+      `INSERT INTO order_date_change_requests
+       (order_id, customer_id, old_selected_days, requested_selected_days, notes)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      order.id,
+      customer.id,
+      order.selected_days,
+      selectedDays.join(","),
+      optionalString(formData, "notes"),
+    )
+    .run();
+  revalidatePath("/my-orders");
+  redirect("/my-orders?requested=dates");
 }
 
 export async function updatePricingRule(formData: FormData) {
@@ -2013,4 +2637,3 @@ export async function deleteThaliPlan(formData: FormData) {
   revalidatePath("/admin/pricing");
   revalidatePath("/order");
 }
-

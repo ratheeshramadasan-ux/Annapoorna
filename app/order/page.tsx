@@ -4,8 +4,13 @@ import { getPublicMenu } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-export default async function OrderPage() {
+export default async function OrderPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
   const menu = await getPublicMenu();
+  const params = await searchParams;
 
   return (
     <PublicShell
@@ -13,7 +18,7 @@ export default async function OrderPage() {
       eyebrow="Pre-order pickup meals"
       title="Order Food"
     >
-      <OrderForm {...menu} />
+      <OrderForm {...menu} error={params.error} />
     </PublicShell>
   );
 }

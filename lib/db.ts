@@ -3,12 +3,14 @@ import type {
   AppSetting,
   Customer,
   D1DatabaseLike,
+  D1PreparedStatement,
   Ingredient,
   MenuCategory,
   MenuAvailability,
   MenuItemIngredient,
   MenuPrice,
   MenuItem,
+  Holiday,
   Order,
   OrderItem,
   PickupSlot,
@@ -25,8 +27,37 @@ type EnvWithDb = {
   NEXT_SERVER_ACTIONS_ENCRYPTION_KEY?: string;
 };
 
+type LocalWranglerD1Database = D1DatabaseLike & {
+  __localWrangler: true;
+};
+
+type LocalSqliteDatabase = {
+  prepare: (query: string) => {
+    all: (...values: unknown[]) => unknown[];
+    get: (...values: unknown[]) => unknown;
+    run: (...values: unknown[]) => { lastInsertRowid?: number | bigint };
+  };
+};
+
 let runtimeEnvPromise: Promise<EnvWithDb> | null = null;
 let schemaReadyPromise: Promise<void> | null = null;
+let localDevDb: D1DatabaseLike | null | undefined;
+
+function isPlainNextDevRuntime() {
+  return (
+    process.env.NODE_ENV === "development" &&
+    !process.env.CF_PAGES &&
+    !process.env.CLOUDFLARE_ACCOUNT_ID &&
+    !process.env.WRANGLER
+  );
+}
+
+function toPlainRow<T = unknown>(row: unknown): T {
+  if (!row || typeof row !== "object") {
+    return row as T;
+  }
+  return { ...(row as Record<string, unknown>) } as T;
+}
 
 function processEnvFallback(): EnvWithDb {
   return {
@@ -38,13 +69,7 @@ function processEnvFallback(): EnvWithDb {
 }
 
 async function loadRuntimeEnv(forceCloudflare = false): Promise<EnvWithDb> {
-  const isPlainNextDev =
-    process.env.NODE_ENV === "development" &&
-    !process.env.CF_PAGES &&
-    !process.env.CLOUDFLARE_ACCOUNT_ID &&
-    !process.env.WRANGLER;
-
-  if (isPlainNextDev && !forceCloudflare) {
+  if (isPlainNextDevRuntime()) {
     return processEnvFallback();
   }
 
@@ -76,7 +101,14 @@ export async function getRuntimeEnv(forceCloudflare = false): Promise<EnvWithDb>
 
 export async function getDb(forceCloudflare = false): Promise<D1DatabaseLike | null> {
   const env = await getRuntimeEnv(forceCloudflare);
-  return env.DB ?? null;
+  if (env.DB) {
+    return env.DB;
+  }
+  if (isPlainNextDevRuntime()) {
+    localDevDb ??= await createLocalSqliteD1();
+    return localDevDb;
+  }
+  return null;
 }
 
 export async function requireDb(): Promise<D1DatabaseLike> {
@@ -85,6 +117,73 @@ export async function requireDb(): Promise<D1DatabaseLike> {
     throw new Error("D1 database binding DB is not available in this runtime.");
   }
   return db;
+}
+
+async function createLocalSqliteD1(): Promise<D1DatabaseLike | null> {
+  const { existsSync, readdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const sqliteDir = join(
+    process.cwd(),
+    ".wrangler",
+    "state",
+    "v3",
+    "d1",
+    "miniflare-D1DatabaseObject",
+  );
+  if (!existsSync(sqliteDir)) {
+    return null;
+  }
+  const sqliteFile = readdirSync(sqliteDir).find(
+    (file) => file.endsWith(".sqlite") && file !== "metadata.sqlite",
+  );
+  if (!sqliteFile) {
+    return null;
+  }
+  const sqliteModule = (await new Function(
+    "return import('node:sqlite')",
+  )()) as {
+    DatabaseSync: new (path: string) => LocalSqliteDatabase;
+  };
+  const { DatabaseSync } = sqliteModule;
+  const sqlite = new DatabaseSync(join(sqliteDir, sqliteFile));
+  const localDb: LocalWranglerD1Database = {
+    __localWrangler: true,
+    prepare(query: string) {
+      let values: unknown[] = [];
+      const statement: D1PreparedStatement = {
+        bind(...nextValues: unknown[]) {
+          values = nextValues;
+          return statement;
+        },
+        async all<T = unknown>() {
+          const rows = sqlite.prepare(query).all(...values).map((row) => toPlainRow<T>(row));
+          return {
+            results: rows,
+            success: true,
+            meta: {},
+          };
+        },
+        async first<T = unknown>(column?: string) {
+          const row = toPlainRow<Record<string, unknown> | undefined>(
+            sqlite.prepare(query).get(...values),
+          );
+          if (!row) {
+            return null;
+          }
+          return (column ? row[column] : row) as T;
+        },
+        async run() {
+          const result = sqlite.prepare(query).run(...values);
+          return {
+            success: true,
+            meta: { last_row_id: Number(result.lastInsertRowid) || undefined },
+          };
+        },
+      };
+      return statement;
+    },
+  };
+  return localDb;
 }
 
 async function runSchemaStatement(db: D1DatabaseLike, sql: string) {
@@ -204,6 +303,26 @@ async function ensureKitchenSchemaOnce() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
+    `CREATE TABLE IF NOT EXISTS order_date_change_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL,
+      customer_id INTEGER NOT NULL,
+      old_selected_days TEXT,
+      requested_selected_days TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS holidays (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      holiday_date TEXT NOT NULL,
+      end_date TEXT,
+      notice_message TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
   ];
 
   for (const statement of alterStatements) {
@@ -316,6 +435,17 @@ async function ensureKitchenSchemaOnce() {
     ["home_menu_lines", defaultHomeContent.menu.join("\\n"), "text"],
     ["home_pickup_lines", defaultHomeContent.pickup.join("\\n"), "text"],
     ["home_perfect_for_lines", defaultHomeContent.perfectFor.join("\\n"), "text"],
+    [
+      "order_customer_message_template",
+      "Hi {customer_name},\\n\\nYour Annapoorna order {order_number} has been received for {date}.\\nTrack your order here: {link}\\n\\n{admin_signature}",
+      "text",
+    ],
+    [
+      "order_admin_message_template",
+      "New Annapoorna order {order_number}\\nCustomer: {customer_name}\\nDate: {date}\\nLink: {link}\\n\\n{admin_signature}",
+      "text",
+    ],
+    ["portal_admin_signature", "Regards,\\nTeam Annapoorna", "text"],
   ];
   for (const [key, value, type] of settings) {
     try {
@@ -329,7 +459,11 @@ async function ensureKitchenSchemaOnce() {
           key,
           value.replace(/\\n/g, "\n"),
           type,
-          key.startsWith("home_") ? "home" : "fulfillment",
+          key.startsWith("home_")
+            ? "home"
+            : key.startsWith("order_") || key === "portal_admin_signature"
+              ? "notifications"
+              : "fulfillment",
           key,
         )
         .run();
@@ -446,7 +580,7 @@ export function settingNumber(
 
 export async function getPublicMenu() {
   await ensureKitchenSchema();
-  const [categories, items, availability, prices, thaliPlans, pricingRules, pickupSlots, settings] =
+  const [categories, items, availability, prices, thaliPlans, pricingRules, pickupSlots, holidays, settings] =
     await Promise.all([
       all<MenuCategory>(
         `SELECT id, name, description, sort_order, is_active
@@ -511,6 +645,12 @@ export async function getPublicMenu() {
          WHERE is_active = 1
          ORDER BY sort_order ASC, day_of_week ASC, start_time ASC`,
       ),
+      all<Holiday>(
+        `SELECT id, name, holiday_date, end_date, notice_message, is_active, created_at
+         FROM holidays
+         WHERE is_active = 1
+         ORDER BY holiday_date ASC, name ASC`,
+      ),
       getSettings(),
     ]);
 
@@ -522,6 +662,7 @@ export async function getPublicMenu() {
     thaliPlans,
     pricingRules,
     pickupSlots,
+    holidays,
     settings,
   };
 }
@@ -531,7 +672,10 @@ export async function getAdminMenuData() {
   const [categories, items, availability, prices, ingredients, recipes] =
     await Promise.all([
       all<MenuCategory>(
-        "SELECT * FROM menu_categories ORDER BY sort_order, name",
+        `SELECT *
+         FROM menu_categories
+         WHERE id IN (SELECT MIN(id) FROM menu_categories GROUP BY lower(name))
+         ORDER BY sort_order, name`,
       ),
       all<MenuItem>(
         `SELECT mi.*, mc.name AS category_name
@@ -543,7 +687,10 @@ export async function getAdminMenuData() {
         "SELECT * FROM menu_item_availability WHERE is_active = 1 ORDER BY menu_item_id, day_of_week",
       ),
       all<MenuPrice>(
-        "SELECT * FROM menu_prices WHERE active = 1 ORDER BY menu_item_id, price_type, effective_from DESC",
+        `SELECT *
+         FROM menu_prices
+         WHERE active = 1
+         ORDER BY menu_item_id, price_type, effective_to IS NOT NULL, effective_from DESC, id DESC`,
       ),
       all<Ingredient>(
         "SELECT * FROM ingredients WHERE active = 1 ORDER BY name",

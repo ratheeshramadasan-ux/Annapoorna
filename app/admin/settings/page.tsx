@@ -2,6 +2,7 @@ import {
   updateAdminAlertSettings,
   updateDeliverySettings,
   updateHomeContent,
+  updateOrderNotificationSettings,
   updateReviewSettings,
   updateSetting,
 } from "@/app/actions";
@@ -48,11 +49,31 @@ export default async function AdminSettingsPage({
      ORDER BY role DESC, email`,
   );
   const valueFor = (key: string) => rows.find((row) => row.key === key)?.value ?? "";
+  const valueOrDefault = (key: string, fallback: string) => valueFor(key) || fallback;
+  const customerMessageDefault = [
+    "Hi {customer_name},",
+    "",
+    "Your Annapoorna order {order_number} has been received for {date}.",
+    "Track your order here: {link}",
+    "",
+    "{admin_signature}",
+  ].join("\n");
+  const adminMessageDefault = [
+    "New Annapoorna order {order_number}",
+    "Customer: {customer_name}",
+    "Date: {date}",
+    "Link: {link}",
+    "",
+    "{admin_signature}",
+  ].join("\n");
 
   return (
     <AdminShell title="Settings">
       {params.saved === "alerts" ? (
         <p className="admin-flash">Admin alert settings saved successfully.</p>
+      ) : null}
+      {params.saved === "order-messages" ? (
+        <p className="admin-flash">Order message templates saved successfully.</p>
       ) : null}
       <form action={updateDeliverySettings} className="delivery-settings-card">
         <div>
@@ -153,6 +174,48 @@ export default async function AdminSettingsPage({
           ))}
         </div>
         <button type="submit">Save admin alerts</button>
+      </form>
+
+      <form action={updateOrderNotificationSettings} className="delivery-settings-card message-template-card">
+        <div>
+          <h3>Order Messages</h3>
+          <p>Manage the email and WhatsApp message format used after an order is placed.</p>
+        </div>
+        <div className="placeholder-list wide-field">
+          {["{customer_name}", "{order_number}", "{date}", "{link}", "{admin_signature}"].map(
+            (placeholder) => (
+              <code key={placeholder}>{placeholder}</code>
+            ),
+          )}
+        </div>
+        <label className="wide-field">
+          Customer message format
+          <textarea
+            name="order_customer_message_template"
+            rows={7}
+            defaultValue={valueOrDefault("order_customer_message_template", customerMessageDefault)}
+            required
+          />
+        </label>
+        <label className="wide-field">
+          Admin message format
+          <textarea
+            name="order_admin_message_template"
+            rows={6}
+            defaultValue={valueOrDefault("order_admin_message_template", adminMessageDefault)}
+            required
+          />
+        </label>
+        <label className="wide-field">
+          Portal admin signature
+          <textarea
+            name="portal_admin_signature"
+            rows={3}
+            defaultValue={valueOrDefault("portal_admin_signature", "Regards,\nTeam Annapoorna")}
+            required
+          />
+        </label>
+        <button type="submit">Save order messages</button>
       </form>
 
       <form action={updateHomeContent} className="delivery-settings-card home-content-card">

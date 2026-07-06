@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { submitOrder } from "@/app/actions";
 import { formatMoney, formatPickupDate } from "@/lib/format";
 import {
@@ -13,6 +13,7 @@ import {
 import type {
   MenuAvailability,
   MenuCategory,
+  Holiday,
   MenuItem,
   MenuPrice,
   PickupSlot,
@@ -28,7 +29,9 @@ type OrderFormProps = {
   thaliPlans: ThaliPlan[];
   pricingRules: PricingRule[];
   pickupSlots: PickupSlot[];
+  holidays: Holiday[];
   settings: Record<string, string>;
+  error?: string;
 };
 
 const orderTypes: Array<{ key: OrderType; label: string; description: string }> = [
@@ -38,20 +41,94 @@ const orderTypes: Array<{ key: OrderType; label: string; description: string }> 
   { key: "bulk", label: "Bulk Order", description: "Event orders with notice." },
 ];
 
-const days = [
-  ["0", "Sun"],
-  ["1", "Mon"],
-  ["2", "Tue"],
-  ["3", "Wed"],
-  ["4", "Thu"],
-  ["5", "Fri"],
-  ["6", "Sat"],
-];
+const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function todayPlus(daysToAdd: number) {
   const date = new Date();
   date.setDate(date.getDate() + daysToAdd);
   return date.toISOString().slice(0, 10);
+}
+
+function firstValidOrderDate(
+  settings: Record<string, string>,
+  pickupSlots: PickupSlot[],
+  holidays: Holiday[],
+  noticeHours = Number(settings.order_cutoff_hours_before_pickup ?? 24),
+) {
+  const sameDayEnabled = settings.same_day_order_enabled === "true";
+  for (let daysToAdd = sameDayEnabled ? 0 : 1; daysToAdd <= 60; daysToAdd += 1) {
+    const date = todayPlus(daysToAdd);
+    if (holidayForDate(date, holidays)) {
+      continue;
+    }
+    const day = dateFromValue(date).getDay();
+    const slotsForDay = pickupSlots.filter((slot) => slot.day_of_week === day || slot.day_of_week === null);
+    const slot = slotsForDay[0] ?? pickupSlots[0];
+    const pickupDateTime = new Date(`${date}T${slot?.start_time ?? "12:00"}:00`);
+    if (pickupDateTime.getTime() - Date.now() >= noticeHours * 60 * 60 * 1000) {
+      return date;
+    }
+  }
+  return todayPlus(2);
+}
+
+function dateFromValue(dateValue: string) {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function dateValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(dateValueString: string, daysToAdd: number) {
+  const date = dateFromValue(dateValueString);
+  date.setDate(date.getDate() + daysToAdd);
+  return dateValue(date);
+}
+
+function holidayForDate(dateValueString: string, holidays: Holiday[]) {
+  return holidays.find((holiday) => {
+    if (holiday.is_active !== 1) {
+      return false;
+    }
+    const endDate = holiday.end_date || holiday.holiday_date;
+    return dateValueString >= holiday.holiday_date && dateValueString <= endDate;
+  });
+}
+
+function weekdaysInWindow(startDate: string, durationDays: number, holidays: Holiday[]) {
+  return Array.from({ length: durationDays }, (_, index) => {
+    const date = dateFromValue(startDate);
+    date.setDate(date.getDate() + index);
+    return date;
+  })
+    .filter((date) => {
+      const day = date.getDay();
+      return day >= 1 && day <= 5;
+    })
+    .map((date) => ({
+      value: dateValue(date),
+      label: `${weekdayLabels[date.getDay()]} ${date.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })}`,
+      holiday: holidayForDate(dateValue(date), holidays),
+    }));
+}
+
+function planFoodType(plan: ThaliPlan) {
+  const text = `${plan.name} ${plan.description ?? ""}`.toLowerCase();
+  return text.includes("nonveg") ||
+    text.includes("non-veg") ||
+    text.includes("chicken") ||
+    text.includes("fish") ||
+    text.includes("egg")
+    ? "nonveg"
+    : "veg";
 }
 
 export default function OrderForm({
@@ -61,20 +138,29 @@ export default function OrderForm({
   prices,
   thaliPlans,
   pickupSlots,
+  holidays,
   settings,
+  error,
 }: OrderFormProps) {
+  const regularNoticeHours = Number(settings.order_cutoff_hours_before_pickup ?? 24);
+  const bulkNoticeHours = Math.max(
+    regularNoticeHours,
+    ...items.filter((item) => item.bulk_order_eligible === 1).map((item) => item.bulk_notice_hours ?? 24),
+  );
+  const initialValidDate = firstValidOrderDate(settings, pickupSlots, holidays, regularNoticeHours);
+  const initialBulkDate = firstValidOrderDate(settings, pickupSlots, holidays, bulkNoticeHours);
   const [orderType, setOrderType] = useState<OrderType>("daily");
-  const [dailyDate, setDailyDate] = useState(todayPlus(1));
-  const [weekStartDate, setWeekStartDate] = useState(todayPlus(1));
-  const [startDate, setStartDate] = useState(todayPlus(1));
-  const [endDate, setEndDate] = useState(todayPlus(30));
-  const [bulkDate, setBulkDate] = useState(todayPlus(3));
-  const [selectedDays, setSelectedDays] = useState<string[]>(["1", "2", "3", "4", "5"]);
+  const [dailyDate, setDailyDate] = useState(initialValidDate);
+  const [weekStartDate, setWeekStartDate] = useState(initialValidDate);
+  const [startDate, setStartDate] = useState(initialValidDate);
+  const [bulkDate, setBulkDate] = useState(initialBulkDate);
+  const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [fulfillment, setFulfillment] = useState<"pickup" | "delivery">("pickup");
   const [itemQuantities, setItemQuantities] = useState<Record<number, number>>({});
   const [planQuantities, setPlanQuantities] = useState<Record<number, number>>({});
   const [slotId, setSlotId] = useState(String(pickupSlots[0]?.id ?? ""));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
   const submissionToken = useRef(
     globalThis.crypto?.randomUUID?.() ??
       `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -88,6 +174,19 @@ export default function OrderForm({
     startDate,
     bulkDate,
   );
+  const selectedEndDate =
+    orderType === "weekly"
+      ? addDays(weekStartDate, 13)
+      : orderType === "monthly"
+        ? addDays(startDate, 39)
+        : selectedDate;
+  const selectableDates =
+    orderType === "weekly"
+      ? weekdaysInWindow(weekStartDate, 14, holidays)
+      : orderType === "monthly"
+        ? weekdaysInWindow(startDate, 40, holidays)
+        : [];
+  const selectedHoliday = holidayForDate(selectedDate, holidays);
   const defaultVegThaliImage = items.find(
     (item) => item.category_name === "Thali" && item.food_type === "veg"
   )?.image_url ?? "/assets/veg-thali.png";
@@ -95,23 +194,83 @@ export default function OrderForm({
   const defaultNonVegThaliImage = items.find(
     (item) => item.category_name === "Thali" && item.food_type === "nonveg"
   )?.image_url ?? "/assets/veg-thali.png";
+  const defaultVegThaliDescription = items.find(
+    (item) => item.category_name === "Thali" && item.food_type === "veg"
+  )?.description;
+  const defaultNonVegThaliDescription = items.find(
+    (item) => item.category_name === "Thali" && item.food_type === "nonveg"
+  )?.description;
 
   const showPlans = orderType === "daily" || orderType === "weekly" || orderType === "monthly";
   const visiblePlans = thaliPlans.filter(
     (plan) => plan.plan_type === orderType && isThaliPlanAvailableOn(plan, selectedDate),
   );
-  const visibleItems = items.filter((item) => {
-    if (item.public_sold_out === 1) {
-      return false;
+  useEffect(() => {
+    setSelectedDays([]);
+  }, [orderType]);
+
+  useEffect(() => {
+    if (orderType === "weekly") {
+      setSelectedDays(
+        weekdaysInWindow(weekStartDate, 14, holidays)
+          .filter((date) => !date.holiday)
+          .slice(0, 5)
+          .map((date) => date.value),
+      );
     }
-    if (orderType === "bulk" && item.bulk_order_eligible !== 1) {
-      return false;
+  }, [holidays, orderType, weekStartDate]);
+
+  useEffect(() => {
+    if (orderType === "monthly") {
+      setSelectedDays(
+        weekdaysInWindow(startDate, 40, holidays)
+          .filter((date) => !date.holiday)
+          .slice(0, 20)
+          .map((date) => date.value),
+      );
     }
-    if ((orderType === "weekly" || orderType === "monthly") && item.category_name !== "Thali") {
-      return false;
+  }, [holidays, orderType, startDate]);
+
+  const visibleItems = useMemo(
+    () =>
+      items.filter((item) => {
+        if (orderType === "weekly" || orderType === "monthly") {
+          return false;
+        }
+        if (item.public_sold_out === 1) {
+          return false;
+        }
+        if (orderType === "bulk" && item.bulk_order_eligible !== 1) {
+          return false;
+        }
+        return isMenuItemAvailableOn(item, availability, selectedDate);
+      }),
+    [availability, items, orderType, selectedDate],
+  );
+  const visibleCategories = useMemo(
+    () =>
+      categories
+        .map((category) => ({
+          category,
+          items: visibleItems.filter((item) => item.category_id === category.id),
+        }))
+        .filter((entry) => entry.items.length > 0),
+    [categories, visibleItems],
+  );
+  const activeCategory =
+    visibleCategories.find((entry) => entry.category.id === activeCategoryId) ??
+    visibleCategories[0] ??
+    null;
+
+  useEffect(() => {
+    if (
+      activeCategoryId &&
+      visibleCategories.some((entry) => entry.category.id === activeCategoryId)
+    ) {
+      return;
     }
-    return isMenuItemAvailableOn(item, availability, selectedDate);
-  });
+    setActiveCategoryId(visibleCategories[0]?.category.id ?? null);
+  }, [activeCategoryId, visibleCategories]);
 
   const summary = useMemo(() => {
     const itemLines = visibleItems
@@ -185,8 +344,14 @@ export default function OrderForm({
       <input type="hidden" name="submission_token" value={submissionToken.current} />
       <input type="hidden" name="order_type" value={orderType} />
       <input type="hidden" name="selected_start_date" value={selectedDate} />
-      <input type="hidden" name="selected_end_date" value={orderType === "monthly" ? endDate : selectedDate} />
+      <input type="hidden" name="selected_end_date" value={selectedEndDate} />
       <input type="hidden" name="selected_days" value={selectedDays.join(",")} />
+      {error ? <p className="form-error order-form-error">{error}</p> : null}
+      {selectedHoliday ? (
+        <p className="form-error order-form-error">
+          {formatPickupDate(selectedDate)} is blocked for {selectedHoliday.name}. Please choose another date.
+        </p>
+      ) : null}
 
       <div className="order-main-column">
         <div className="order-top-grid">
@@ -217,16 +382,34 @@ export default function OrderForm({
             {orderType === "daily" ? (
               <label>
                 Order date
-                <input name="daily_date" type="date" value={dailyDate} onChange={(event) => setDailyDate(event.target.value)} />
+                <input
+                  name="daily_date"
+                  type="date"
+                  min={initialValidDate}
+                  value={dailyDate}
+                  onChange={(event) => setDailyDate(event.target.value)}
+                />
               </label>
             ) : null}
             {orderType === "weekly" ? (
               <>
                 <label>
                   Week start date
-                  <input name="week_start_date" type="date" value={weekStartDate} onChange={(event) => setWeekStartDate(event.target.value)} />
+                  <input
+                    name="week_start_date"
+                    type="date"
+                    min={initialValidDate}
+                    value={weekStartDate}
+                    onChange={(event) => setWeekStartDate(event.target.value)}
+                  />
                 </label>
-                <DaySelector selectedDays={selectedDays} setSelectedDays={setSelectedDays} />
+                <DateSelector
+                  dates={selectableDates}
+                  selectedDays={selectedDays}
+                  setSelectedDays={setSelectedDays}
+                  maxSelected={5}
+                  summary={`Choose up to 5 weekdays between ${formatPickupDate(weekStartDate)} and ${formatPickupDate(selectedEndDate)}.`}
+                />
               </>
             ) : null}
             {orderType === "monthly" ? (
@@ -234,26 +417,44 @@ export default function OrderForm({
                 <div className="two-column-fields">
                   <label>
                     Start date
-                    <input name="monthly_start_date" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+                    <input
+                      name="monthly_start_date"
+                      type="date"
+                      min={initialValidDate}
+                      value={startDate}
+                      onChange={(event) => setStartDate(event.target.value)}
+                    />
                   </label>
-                  <label>
-                    End date
-                    <input name="monthly_end_date" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
-                  </label>
+                  <div className="date-window-note">
+                    <span>Plan window</span>
+                    <strong>{formatPickupDate(startDate)} to {formatPickupDate(selectedEndDate)}</strong>
+                  </div>
                 </div>
-                <DaySelector selectedDays={selectedDays} setSelectedDays={setSelectedDays} />
+                <DateSelector
+                  dates={selectableDates}
+                  selectedDays={selectedDays}
+                  setSelectedDays={setSelectedDays}
+                  maxSelected={20}
+                  summary="Choose up to 20 weekdays within the 40-day monthly window."
+                />
               </>
             ) : null}
             {orderType === "bulk" ? (
               <label>
                 Event/order date
-                <input name="bulk_date" type="date" value={bulkDate} onChange={(event) => setBulkDate(event.target.value)} />
+                <input
+                  name="bulk_date"
+                  type="date"
+                  min={initialBulkDate}
+                  value={bulkDate}
+                  onChange={(event) => setBulkDate(event.target.value)}
+                />
               </label>
             ) : null}
           </section>
         </div>
 
-        <section className="order-step">
+        <section className="order-step menu-order-step">
           <p>Step 3</p>
           <h3>Available menu</h3>
           {showPlans && visiblePlans.length > 0 ? (
@@ -269,8 +470,10 @@ export default function OrderForm({
                   { thaliPlanId: plan.id, priceType: "subscription" },
                   plan.effective_price_cents ?? 0,
                 );
-                const isPlanNonVeg = plan.name.toLowerCase().includes("nonveg") || plan.name.toLowerCase().includes("non-veg");
-                const planImage = isPlanNonVeg ? defaultNonVegThaliImage : defaultVegThaliImage;
+                const foodType = planFoodType(plan);
+                const planImage = foodType === "nonveg" ? defaultNonVegThaliImage : defaultVegThaliImage;
+                const fallbackDescription =
+                  foodType === "nonveg" ? defaultNonVegThaliDescription : defaultVegThaliDescription;
 
                 return (
                   <article key={plan.id} className="menu-row">
@@ -285,10 +488,18 @@ export default function OrderForm({
                       </div>
                       <div>
                         <div className="menu-row-title">
+                          <FoodTypeIcon type={foodType} />
                           <h4>{plan.name}</h4>
                           <span>{plan.plan_type}</span>
                         </div>
-                        {plan.description ? <p>{plan.description}</p> : null}
+                        {fallbackDescription ? (
+                          <div
+                            className="menu-description"
+                            dangerouslySetInnerHTML={{ __html: fallbackDescription }}
+                          />
+                        ) : plan.description ? (
+                          <p>{plan.description}</p>
+                        ) : null}
                       </div>
                     </div>
                     <QuantityBox
@@ -305,18 +516,29 @@ export default function OrderForm({
             </div>
           ) : null}
 
-          {categories.map((category) => {
-            const categoryItems = visibleItems.filter((item) => item.category_id === category.id);
-            if (categoryItems.length === 0) {
-              return null;
-            }
-            return (
-              <section key={category.id} className="menu-section">
+          {activeCategory ? (
+            <section className="menu-section compact-menu-section">
+              <div className="category-tabs" role="tablist" aria-label="Menu categories">
+                {visibleCategories.map(({ category, items: categoryItems }) => (
+                  <button
+                    key={category.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeCategory.category.id === category.id}
+                    className={activeCategory.category.id === category.id ? "selected" : undefined}
+                    onClick={() => setActiveCategoryId(category.id)}
+                  >
+                    <span>{category.name}</span>
+                    <strong>{categoryItems.length}</strong>
+                  </button>
+                ))}
+              </div>
                 <div className="section-title">
-                  <h3>{category.name}</h3>
-                  {category.description ? <p>{category.description}</p> : null}
+                  <h3>{activeCategory.category.name}</h3>
+                  {activeCategory.category.description ? <p>{activeCategory.category.description}</p> : null}
                 </div>
-                {categoryItems.map((item) => {
+                <div className="compact-menu-list">
+                {activeCategory.items.map((item) => {
                   const price = effectivePrice(
                     prices,
                     selectedDate,
@@ -339,10 +561,7 @@ export default function OrderForm({
                         </div>
                         <div>
                           <div className="menu-row-title">
-                            <span
-                              className={`food-type-icon ${item.food_type}`}
-                              title={item.food_type === "veg" ? "Vegetarian" : "Non-Vegetarian"}
-                            />
+                            <FoodTypeIcon type={item.food_type === "nonveg" ? "nonveg" : "veg"} />
                             <h4>{item.name}</h4>
                             {orderType === "bulk" ? <span>Bulk eligible</span> : null}
                           </div>
@@ -377,9 +596,9 @@ export default function OrderForm({
                     </article>
                   );
                 })}
+                </div>
               </section>
-            );
-          })}
+          ) : null}
           {visibleItems.length === 0 && visiblePlans.length === 0 ? (
             <div className="empty-state">
               <h3>No available items</h3>
@@ -389,8 +608,35 @@ export default function OrderForm({
         </section>
 
         <div className="order-bottom-grid">
-          <section className="order-step">
+          <section className="order-step customer-details-step">
             <p>Step 4</p>
+            <h3>Customer details</h3>
+            <div className="two-column-fields">
+              <label>
+                Name
+                <input name="customer_name" required />
+              </label>
+              <label>
+                Phone
+                <input name="customer_phone" type="tel" required />
+              </label>
+              <label>
+                Email
+                <input name="customer_email" type="email" />
+              </label>
+              <label>
+                Allergy notes
+                <input name="allergy_notes" />
+              </label>
+            </div>
+            <label>
+              Order notes
+              <textarea name="customer_notes" rows={4} />
+            </label>
+          </section>
+
+          <section className="order-step fulfillment-step">
+            <p>Step 5</p>
             <h3>Fulfillment</h3>
             <div className="segmented-grid fulfillment-grid" role="tablist" aria-label="Fulfillment method">
               <button
@@ -401,7 +647,7 @@ export default function OrderForm({
                 onClick={() => setFulfillment("pickup")}
               >
                 <strong>Pickup</strong>
-                <span>Always available</span>
+                <span>Available</span>
               </button>
               {deliveryEnabled ? (
                 <button
@@ -418,7 +664,7 @@ export default function OrderForm({
             </div>
             <input type="hidden" name="fulfillment_method" value={fulfillment} />
             {!deliveryEnabled ? (
-              <p className="pickup-note">Currently available for pickup only.</p>
+              <p className="pickup-note">Pickup only.</p>
             ) : null}
             {fulfillment === "pickup" ? (
               <label>
@@ -452,33 +698,6 @@ export default function OrderForm({
               </div>
             )}
           </section>
-
-          <section className="order-step">
-            <p>Step 5</p>
-            <h3>Customer details</h3>
-            <div className="two-column-fields">
-              <label>
-                Name
-                <input name="customer_name" required />
-              </label>
-              <label>
-                Phone
-                <input name="customer_phone" type="tel" required />
-              </label>
-              <label>
-                Email
-                <input name="customer_email" type="email" />
-              </label>
-              <label>
-                Allergy notes
-                <input name="allergy_notes" />
-              </label>
-            </div>
-            <label>
-              Order notes
-              <textarea name="customer_notes" rows={4} />
-            </label>
-          </section>
         </div>
       </div>
 
@@ -511,7 +730,7 @@ export default function OrderForm({
           <span>Total amount</span>
           <strong>{formatMoney(summary.total)}</strong>
         </div>
-        <button className="gold-button full-button" type="submit" disabled={isSubmitting}>
+        <button className="gold-button full-button" type="submit" disabled={isSubmitting || Boolean(selectedHoliday)}>
           {isSubmitting ? "Submitting..." : "Submit Order"}
         </button>
         <p className="fine-print">Orders are created as pending for confirmation.</p>
@@ -553,31 +772,54 @@ function QuantityBox({
   );
 }
 
-function DaySelector({
+function FoodTypeIcon({ type }: { type: "veg" | "nonveg" }) {
+  return (
+    <span className={`food-type-badge ${type}`} title={type === "veg" ? "Vegetarian" : "Non-Vegetarian"}>
+      <span className="food-type-icon" />
+      <span>{type === "veg" ? "Veg" : "Non-Veg"}</span>
+    </span>
+  );
+}
+
+function DateSelector({
+  dates,
   selectedDays,
   setSelectedDays,
+  maxSelected,
+  summary,
 }: {
+  dates: Array<{ value: string; label: string; holiday?: Holiday }>;
   selectedDays: string[];
   setSelectedDays: (days: string[]) => void;
+  maxSelected: number;
+  summary: string;
 }) {
   return (
-    <div className="day-selector">
-      {days.map(([value, label]) => (
+    <div className="date-selector-wrap">
+      <p className="date-selector-summary">
+        {summary} Selected {selectedDays.length}/{maxSelected}.
+      </p>
+      <div className="day-selector">
+      {dates.map(({ value, label, holiday }) => (
         <label key={value} className="checkbox-line">
           <input
             type="checkbox"
             checked={selectedDays.includes(value)}
-            onChange={(event) =>
-              setSelectedDays(
-                event.target.checked
-                  ? [...selectedDays, value]
-                  : selectedDays.filter((day) => day !== value),
-              )
-            }
+            onChange={(event) => {
+              if (!event.target.checked) {
+                setSelectedDays(selectedDays.filter((day) => day !== value));
+                return;
+              }
+              if (!selectedDays.includes(value)) {
+                setSelectedDays([...selectedDays, value].slice(0, maxSelected));
+              }
+            }}
+            disabled={Boolean(holiday) || (!selectedDays.includes(value) && selectedDays.length >= maxSelected)}
           />
-          {label}
+          {holiday ? `${label} - blocked: ${holiday.name}` : label}
         </label>
       ))}
+      </div>
     </div>
   );
 }

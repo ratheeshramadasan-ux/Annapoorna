@@ -41,7 +41,17 @@ const dayOptions = [
 const servingUnits = ["plate", "cup", "litre", "piece", "box", "kg", "gram", "ml"];
 
 function priceForItem(prices: MenuPrice[], itemId: number, priceType: MenuPrice["price_type"]) {
-  return prices.find((price) => price.menu_item_id === itemId && price.price_type === priceType);
+  const matches = prices
+    .filter((price) => price.menu_item_id === itemId && price.price_type === priceType)
+    .sort((a, b) => {
+      if (!a.effective_to && b.effective_to) return -1;
+      if (a.effective_to && !b.effective_to) return 1;
+      if (a.effective_from !== b.effective_from) {
+        return b.effective_from.localeCompare(a.effective_from);
+      }
+      return b.id - a.id;
+    });
+  return matches[0];
 }
 
 function priceInputValue(cents?: number | null) {
@@ -87,6 +97,9 @@ export default function AdminMenuManager({
   recipes,
 }: AdminMenuManagerProps) {
   const [selectedItemId, setSelectedItemId] = useState(savedItemId ?? items[0]?.id ?? null);
+  const [activeTab, setActiveTab] = useState<"categories" | "add" | "items">(
+    saved === "category" ? "categories" : saved === "added" ? "add" : "items",
+  );
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0] ?? null;
 
   useEffect(() => {
@@ -108,6 +121,36 @@ export default function AdminMenuManager({
 
   return (
     <div className="admin-menu-manager">
+      <div className="admin-menu-tabs" role="tablist" aria-label="Menu management">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "categories"}
+          className={activeTab === "categories" ? "selected" : undefined}
+          onClick={() => setActiveTab("categories")}
+        >
+          Categories
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "add"}
+          className={activeTab === "add" ? "selected" : undefined}
+          onClick={() => setActiveTab("add")}
+        >
+          Add Item
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "items"}
+          className={activeTab === "items" ? "selected" : undefined}
+          onClick={() => setActiveTab("items")}
+        >
+          Existing Menu
+        </button>
+      </div>
+
       {saved === "category" ? (
         <p className="admin-flash">Menu category saved successfully.</p>
       ) : null}
@@ -115,6 +158,7 @@ export default function AdminMenuManager({
         <p className="admin-flash">Menu item added successfully.</p>
       ) : null}
 
+      {activeTab === "categories" ? (
       <section className="admin-menu-category-panel">
         <div className="admin-section-heading">
           <h3>Menu categories</h3>
@@ -140,19 +184,26 @@ export default function AdminMenuManager({
           <button type="submit">Add category</button>
         </form>
         <div className="admin-category-list">
+          <div className="admin-category-header" aria-hidden="true">
+            <span>Name</span>
+            <span>Description</span>
+            <span>Sort</span>
+            <span>Status</span>
+            <span>Action</span>
+          </div>
           {categories.map((category) => (
             <form key={category.id} action={updateMenuCategory} className="admin-category-row">
               <input type="hidden" name="category_id" value={category.id} />
               <label>
-                Name
+                <span className="sr-only">Name</span>
                 <input name="name" defaultValue={category.name} required />
               </label>
               <label>
-                Description
+                <span className="sr-only">Description</span>
                 <input name="description" defaultValue={category.description ?? ""} />
               </label>
               <label>
-                Sort
+                <span className="sr-only">Sort</span>
                 <input name="sort_order" type="number" defaultValue={category.sort_order} />
               </label>
               <label className="checkbox-line">
@@ -164,7 +215,9 @@ export default function AdminMenuManager({
           ))}
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "add" ? (
       <section className="admin-menu-add-panel">
         <h3>Add menu item</h3>
         <form action={addMenuItem} className="admin-form-grid menu-admin-form">
@@ -194,7 +247,9 @@ export default function AdminMenuManager({
           <button type="submit">Add item</button>
         </form>
       </section>
+      ) : null}
 
+      {activeTab === "items" ? (
       <section className="admin-menu-workspace">
         <div className="admin-menu-grid-panel">
           <div className="admin-section-heading">
@@ -319,6 +374,7 @@ export default function AdminMenuManager({
           )}
         </aside>
       </section>
+      ) : null}
     </div>
   );
 }

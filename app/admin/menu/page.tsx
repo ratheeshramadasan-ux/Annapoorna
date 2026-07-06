@@ -17,6 +17,7 @@ export default async function AdminMenuPage({
   return (
     <AdminShell title="Menu">
       <AdminMenuManager
+        key={`${params.saved ?? "view"}-${params.item ?? "none"}`}
         saved={params.saved}
         savedItemId={params.item ? Number(params.item) : null}
         categories={categories}
