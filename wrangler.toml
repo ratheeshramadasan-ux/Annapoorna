@@ -1,0 +1,8 @@
+name = "annapoorna-website"
+compatibility_date = "2026-07-05"
+pages_build_output_dir = ".vercel/output/static"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "annapoorna-db"
+database_id = "a9a8afe1-59f7-4f56-b311-2b9540f1485f"
