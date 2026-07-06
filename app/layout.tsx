@@ -32,6 +32,8 @@ export default function RootLayout({
             padding: 2rem;
             background-color: #1a1a1a;
             border-bottom: 2px solid gold;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
           }
           .hero-section img {
             max-height: 300px;
