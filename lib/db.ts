@@ -22,9 +22,22 @@ export { formatMoney, formatPickupDate, nextPickupDate } from "./format";
 
 type EnvWithDb = {
   DB?: D1DatabaseLike;
+  EMAIL?: {
+    send: (message: {
+      to: string | string[];
+      from: string | { email: string; name?: string };
+      replyTo?: string;
+      subject: string;
+      text: string;
+      html?: string;
+    }) => Promise<{ messageId?: string }>;
+  };
   ANNAPOORNA_ADMIN_PASSCODE?: string;
   ANNAPOORNA_SESSION_SECRET?: string;
   NEXT_SERVER_ACTIONS_ENCRYPTION_KEY?: string;
+  WHATSAPP_ACCESS_TOKEN?: string;
+  WHATSAPP_PHONE_NUMBER_ID?: string;
+  WHATSAPP_API_VERSION?: string;
 };
 
 type LocalWranglerD1Database = D1DatabaseLike & {
@@ -65,6 +78,9 @@ function processEnvFallback(): EnvWithDb {
     ANNAPOORNA_SESSION_SECRET: process.env.ANNAPOORNA_SESSION_SECRET,
     NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:
       process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY,
+    WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN,
+    WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    WHATSAPP_API_VERSION: process.env.WHATSAPP_API_VERSION,
   };
 }
 
@@ -446,6 +462,8 @@ async function ensureKitchenSchemaOnce() {
       "text",
     ],
     ["portal_admin_signature", "Regards,\\nTeam Annapoorna", "text"],
+    ["notification_from_email", "", "string"],
+    ["notification_from_name", "Annapoorna", "string"],
   ];
   for (const [key, value, type] of settings) {
     try {

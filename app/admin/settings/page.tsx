@@ -215,6 +215,23 @@ export default async function AdminSettingsPage({
             required
           />
         </label>
+        <label>
+          Email from address
+          <input
+            name="notification_from_email"
+            type="email"
+            placeholder="orders@your-domain.com"
+            defaultValue={valueFor("notification_from_email") || valueFor("business_email")}
+          />
+        </label>
+        <label>
+          Email from name
+          <input
+            name="notification_from_name"
+            placeholder="Annapoorna"
+            defaultValue={valueOrDefault("notification_from_name", "Annapoorna")}
+          />
+        </label>
         <button type="submit">Save order messages</button>
       </form>
 

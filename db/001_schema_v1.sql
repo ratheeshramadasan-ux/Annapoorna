@@ -876,6 +876,8 @@ VALUES
 ('business_phone', '+14034814101', 'string', 'business', 'Business phone number', 1),
 ('business_whatsapp_number', '14034814101', 'string', 'business', 'WhatsApp number without plus sign', 1),
 ('business_email', '', 'string', 'business', 'Business email address', 1),
+('notification_from_email', '', 'string', 'notifications', 'Verified sender email address for order notifications', 0),
+('notification_from_name', 'Annapoorna', 'string', 'notifications', 'Sender display name for order notifications', 0),
 ('pickup_address', '72 Amblehurst GDNS NW, Calgary, AB', 'string', 'business', 'Pickup address', 1),
 ('timezone', 'America/Edmonton', 'string', 'business', 'Business timezone', 0),
 ('default_currency', 'CAD', 'string', 'business', 'Default currency', 1),

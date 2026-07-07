@@ -147,6 +147,10 @@ function normalizePhone(value: string) {
   return value.replace(/[^\d+]/g, "");
 }
 
+function normalizeWhatsAppRecipient(value: string) {
+  return value.replace(/\D/g, "");
+}
+
 function dateFromValue(dateValue: string) {
   const [year, month, day] = dateValue.split("-").map(Number);
   return new Date(year, month - 1, day);
@@ -516,6 +520,189 @@ async function queueCustomerOrderTrackingNotifications(
         message,
       )
       .run();
+  }
+}
+
+type QueuedNotification = {
+  id: number;
+  channel: "email" | "whatsapp" | string;
+  recipient_value: string;
+  subject: string | null;
+  message: string;
+};
+
+function textToHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/\n/g, "<br>");
+}
+
+async function markNotification(
+  db: D1DatabaseLike,
+  id: number,
+  status: string,
+  provider: string,
+  response: string,
+) {
+  const timestampSql =
+    status === "sent"
+      ? ", sent_at = CURRENT_TIMESTAMP"
+      : status === "failed"
+        ? ", failed_at = CURRENT_TIMESTAMP"
+        : "";
+  await db
+    .prepare(
+      `UPDATE notifications
+       SET status = ?,
+           provider = ?,
+           provider_response = ?
+           ${timestampSql}
+       WHERE id = ?`,
+    )
+    .bind(status, provider, response.slice(0, 1500), id)
+    .run();
+}
+
+async function dispatchEmailNotification(
+  db: D1DatabaseLike,
+  settings: Record<string, string>,
+  notification: QueuedNotification,
+) {
+  const env = await getRuntimeEnv(true);
+  const fromEmail =
+    settings.notification_from_email?.trim() || settings.business_email?.trim();
+  const fromName =
+    settings.notification_from_name?.trim() || settings.business_name?.trim() || "Annapoorna";
+
+  if (!env.EMAIL) {
+    await markNotification(
+      db,
+      notification.id,
+      "pending_provider",
+      "cloudflare_email",
+      "EMAIL binding is not configured. Add send_email binding and enable Cloudflare Email Sending.",
+    );
+    return;
+  }
+  if (!fromEmail) {
+    await markNotification(
+      db,
+      notification.id,
+      "pending_provider",
+      "cloudflare_email",
+      "notification_from_email or business_email app setting is required.",
+    );
+    return;
+  }
+
+  try {
+    const result = await env.EMAIL.send({
+      to: notification.recipient_value,
+      from: { email: fromEmail, name: fromName },
+      subject: notification.subject || "Annapoorna notification",
+      text: notification.message,
+      html: textToHtml(notification.message),
+    });
+    await markNotification(
+      db,
+      notification.id,
+      "sent",
+      "cloudflare_email",
+      result.messageId ? `messageId=${result.messageId}` : "sent",
+    );
+  } catch (error) {
+    await markNotification(
+      db,
+      notification.id,
+      "failed",
+      "cloudflare_email",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+async function dispatchWhatsAppNotification(
+  db: D1DatabaseLike,
+  notification: QueuedNotification,
+) {
+  const env = await getRuntimeEnv(true);
+  if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
+    await markNotification(
+      db,
+      notification.id,
+      "pending_provider",
+      "whatsapp_cloud_api",
+      "WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID secrets are required.",
+    );
+    return;
+  }
+
+  const apiVersion = env.WHATSAPP_API_VERSION || "v20.0";
+  const recipient = normalizeWhatsAppRecipient(notification.recipient_value);
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/${apiVersion}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: recipient,
+          type: "text",
+          text: {
+            preview_url: true,
+            body: notification.message,
+          },
+        }),
+      },
+    );
+    const body = await response.text();
+    await markNotification(
+      db,
+      notification.id,
+      response.ok ? "sent" : "failed",
+      "whatsapp_cloud_api",
+      body || response.statusText,
+    );
+  } catch (error) {
+    await markNotification(
+      db,
+      notification.id,
+      "failed",
+      "whatsapp_cloud_api",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+async function dispatchOrderNotifications(
+  db: D1DatabaseLike,
+  settings: Record<string, string>,
+  orderId: number,
+) {
+  const result = await db
+    .prepare(
+      `SELECT id, channel, recipient_value, subject, message
+       FROM notifications
+       WHERE order_id = ?
+         AND status = 'pending'
+       ORDER BY id ASC`,
+    )
+    .bind(orderId)
+    .all<QueuedNotification>();
+
+  for (const notification of result.results ?? []) {
+    if (notification.channel === "email") {
+      await dispatchEmailNotification(db, settings, notification);
+    } else if (notification.channel === "whatsapp") {
+      await dispatchWhatsAppNotification(db, notification);
+    }
   }
 }
 
@@ -1120,6 +1307,11 @@ export async function submitOrder(formData: FormData) {
     });
   } catch {
     // Do not block checkout if the customer notification queue fails.
+  }
+  try {
+    await dispatchOrderNotifications(db, settings, orderId);
+  } catch {
+    // Do not block checkout if a notification provider is unavailable.
   }
 
   revalidatePath("/admin/orders");
@@ -2103,6 +2295,18 @@ export async function updateOrderNotificationSettings(formData: FormData) {
       String(formData.get("portal_admin_signature") ?? ""),
       "text",
       "Reusable signature for portal notifications.",
+    ],
+    [
+      "notification_from_email",
+      String(formData.get("notification_from_email") ?? ""),
+      "string",
+      "Verified sender email address for order notifications.",
+    ],
+    [
+      "notification_from_name",
+      String(formData.get("notification_from_name") ?? ""),
+      "string",
+      "Sender display name for order notifications.",
     ],
   ];
 
