@@ -357,14 +357,64 @@ a {
 
 .step-order-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 335px;
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
+}
+
+.step-order-form > * {
+  min-width: 0;
 }
 
 .order-main-column {
   display: grid;
-  gap: 14px;
+  gap: 12px;
+  min-width: 0;
+}
+
+.order-setup-pane {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(178px, 0.85fr) minmax(148px, 0.65fr);
+  grid-template-areas:
+    "customer customer customer"
+    "type date fulfillment";
+  gap: 14px 18px;
+  align-items: start;
+  border: 1px solid #e1ded5;
+  border-radius: 6px;
+  background: #fff;
+  padding: 16px;
+  box-shadow: 0 12px 26px rgba(18, 15, 10, 0.035);
+}
+
+.order-setup-pane .order-step {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.setup-customer-step {
+  grid-area: customer;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding-bottom: 14px !important;
+  border-bottom: 1px solid #eee9dd !important;
+}
+
+.order-type-step {
+  grid-area: type;
+}
+
+.date-step {
+  grid-area: date;
+}
+
+.setup-fulfillment-step {
+  grid-area: fulfillment;
 }
 
 .order-top-grid,
@@ -382,7 +432,7 @@ a {
   background: #fff;
   border: 1px solid #e1ded5;
   border-radius: 5px;
-  padding: 16px;
+  padding: 14px;
   margin-bottom: 0;
   box-shadow: 0 12px 26px rgba(18, 15, 10, 0.035);
 }
@@ -403,18 +453,19 @@ a {
 
 .order-step > p,
 .order-summary-panel > p {
-  margin: 0 0 5px;
+  margin: 0 0 4px;
   color: var(--gold-muted);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 500;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 .order-step h3 {
-  margin: 0 0 10px;
+  margin: 0 0 8px;
   color: var(--black);
   font-family: var(--font-ui);
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -422,12 +473,12 @@ a {
 .segmented-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .segmented-grid button {
-  min-height: 64px;
-  padding: 10px 11px;
+  min-height: 54px;
+  padding: 8px 9px;
   border: 1px solid #e1ded5;
   border-radius: 5px;
   background: #fffefb;
@@ -461,10 +512,15 @@ a {
 }
 
 .segmented-grid span {
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.segmented-grid strong {
+  font-size: 13px;
+  line-height: 1.1;
 }
 
 .fulfillment-grid {
@@ -472,7 +528,7 @@ a {
 }
 
 .fulfillment-grid button {
-  min-height: 58px;
+  min-height: 46px;
 }
 
 .fulfillment-step {
@@ -480,73 +536,85 @@ a {
 }
 
 .fulfillment-step .pickup-note {
-  margin: 8px 0;
-  font-size: 12px;
+  margin: 6px 0;
+  font-size: 10px;
 }
 
 .fulfillment-step select[name="pickup_slot_id"] {
-  font-size: 70%;
+  font-size: 65%;
 }
 
 .customer-details-step textarea {
-  min-height: 76px;
+  min-height: 54px;
+}
+
+.customer-field-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .two-column-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .day-selector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 6px;
+  max-height: 142px;
+  overflow: auto;
+  margin-top: 8px;
+  border: 1px solid #eee9dd;
+  border-radius: 5px;
+  background: #fffdf8;
+  padding: 8px;
 }
 
 .date-selector-wrap {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .date-selector-summary,
 .date-window-note {
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .date-selector-summary {
-  margin: 0 0 10px;
+  margin: 0;
 }
 
 .date-window-note {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   border: 1px solid #e1ded5;
   border-radius: 4px;
   background: #fffefb;
-  padding: 10px 12px;
+  padding: 8px 9px;
 }
 
 .date-window-note span {
   color: #26352f;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
 }
 
 .date-window-note strong {
   color: var(--black);
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 500;
 }
 
 .day-selector .checkbox-line {
-  min-height: 36px;
+  min-height: 28px;
   border: 1px solid #e1ded5;
   border-radius: 999px;
   background: #fffefb;
-  padding: 8px 10px;
+  padding: 5px 7px;
+  font-size: 11px;
+  line-height: 1.15;
 }
 
 .day-selector .checkbox-line:has(input:checked) {
@@ -644,7 +712,7 @@ a {
 }
 
 .section-title {
-  padding: 16px 18px 12px;
+  padding: 13px 16px 10px;
   border-bottom: 1px solid #eee9dd;
   background: #fff;
 }
@@ -655,7 +723,7 @@ a {
 .checkout-panel h3 {
   margin: 0 0 8px;
   color: var(--black);
-  font-size: 22px;
+  font-size: 18px;
 }
 
 .section-title p,
@@ -665,15 +733,15 @@ a {
 .empty-state p,
 .soft-panel p {
   color: var(--muted);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .menu-row {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 14px;
-  padding: 14px 18px;
+  gap: 12px;
+  padding: 12px 16px;
   border-bottom: 1px solid #f0ede5;
   background: #fff;
 }
@@ -688,13 +756,13 @@ a {
 
 .menu-row-content {
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
 }
 
 .menu-row-image {
-  width: 82px;
+  width: 72px;
   aspect-ratio: 1;
   display: grid;
   place-items: center;
@@ -722,13 +790,13 @@ a {
 .menu-row-title h4 {
   margin: 0;
   color: #17291f;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .menu-description {
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.42;
+  font-size: 12px;
+  line-height: 1.38;
 }
 
 .menu-description p,
@@ -749,8 +817,8 @@ a {
   background: #fff8e8;
   color: #74551d;
   border-radius: 999px;
-  padding: 4px 9px;
-  font-size: 12px;
+  padding: 3px 7px;
+  font-size: 11px;
   font-weight: 500;
 }
 
@@ -762,9 +830,9 @@ a {
 }
 
 .item-controls {
-  min-width: 100px;
+  min-width: 88px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
   justify-items: end;
 }
 
@@ -772,9 +840,9 @@ a {
 .form-panel label,
 .checkout-panel label {
   display: grid;
-  gap: 7px;
+  gap: 5px;
   color: #26352f;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -787,7 +855,8 @@ textarea {
   background: #fffefb;
   color: var(--text);
   font: inherit;
-  padding: 9px 10px;
+  min-height: 34px;
+  padding: 7px 9px;
 }
 
 label:has(input[required])::after,
@@ -815,27 +884,50 @@ label:has(textarea[required])::after {
 }
 
 .item-controls input {
-  width: 62px;
-  min-height: 38px;
+  width: 54px;
+  min-height: 36px;
   text-align: center;
 }
 
 .checkout-panel {
-  position: sticky;
-  top: 18px;
   background: #17130d;
   color: #fff8e8;
   border: 1px solid rgba(230, 189, 99, 0.72);
   border-radius: 6px;
-  padding: 24px;
+  padding: 18px;
   display: grid;
-  gap: 16px;
+  gap: 12px;
+}
+
+.order-summary-panel {
+  position: static;
+  order: -1;
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr) minmax(170px, auto);
+  align-items: center;
+}
+
+.order-summary-panel > p,
+.order-summary-panel h3,
+.order-summary-panel .fine-print {
+  grid-column: 1;
+}
+
+.order-summary-panel .line-list {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  grid-template-columns: repeat(3, minmax(130px, 1fr));
+  margin: 0;
+}
+
+.order-summary-panel .order-total,
+.order-summary-panel .full-button {
+  grid-column: 3;
 }
 
 .checkout-panel h3 {
   color: #fff8e8;
   font-family: var(--font-ui);
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 600;
 }
 
@@ -850,12 +942,12 @@ label:has(textarea[required])::after {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid rgba(201, 154, 62, 0.32);
 }
 
 .order-total strong {
-  font-size: 24px;
+  font-size: 21px;
   color: var(--gold-light);
 }
 
@@ -903,14 +995,23 @@ label:has(textarea[required])::after {
 
 .line-list {
   display: grid;
-  gap: 12px;
-  margin: 20px 0;
+  gap: 9px;
+  margin: 10px 0;
+  font-size: 12px;
 }
 
 .line-list > div {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.line-list span {
+  color: #f2e6cf;
+}
+
+.line-list strong {
+  text-align: right;
 }
 
 .my-order-card {
@@ -1992,6 +2093,7 @@ th {
 
   .order-grid,
   .step-order-form,
+  .order-setup-pane,
   .order-top-grid,
   .order-bottom-grid,
   .reviews-grid,
@@ -2001,6 +2103,16 @@ th {
     grid-template-columns: 1fr;
   }
 
+  .order-setup-pane {
+    grid-template-areas:
+      "customer"
+      "type"
+      "date"
+      "fulfillment";
+    gap: 14px;
+    padding: 14px;
+  }
+
   .checkout-panel {
     position: static;
   }
@@ -2008,12 +2120,31 @@ th {
   .order-summary-panel {
     position: static;
     order: -1;
+    grid-template-columns: 1fr;
+  }
+
+  .order-summary-panel > p,
+  .order-summary-panel h3,
+  .order-summary-panel .fine-print,
+  .order-summary-panel .line-list,
+  .order-summary-panel .order-total,
+  .order-summary-panel .full-button {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .order-summary-panel .line-list {
+    grid-template-columns: 1fr;
   }
 
   .segmented-grid,
   .two-column-fields,
   .delivery-settings-card {
     grid-template-columns: 1fr;
+  }
+
+  .order-type-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .admin-sidebar {
@@ -2101,15 +2232,15 @@ th {
   }
 
   .order-step {
-    padding: 16px;
+    padding: 14px;
   }
 
   .segmented-grid button {
-    min-height: 70px;
+    min-height: 50px;
   }
 
   .day-selector {
-    max-height: 180px;
+    max-height: 150px;
     overflow: auto;
   }
 }

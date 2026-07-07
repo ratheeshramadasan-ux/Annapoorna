@@ -35,7 +35,7 @@ type OrderFormProps = {
 };
 
 const orderTypes: Array<{ key: OrderType; label: string; description: string }> = [
-  { key: "daily", label: "Daily Thali", description: "Choose one pickup date." },
+  { key: "daily", label: "Daily Order", description: "Choose one pickup date." },
   { key: "weekly", label: "Weekly Thali", description: "Choose a week and days." },
   { key: "monthly", label: "Monthly Thali", description: "Choose a date range." },
   { key: "bulk", label: "Bulk Order", description: "Event orders with notice." },
@@ -354,9 +354,36 @@ export default function OrderForm({
       ) : null}
 
       <div className="order-main-column">
-        <div className="order-top-grid">
-          <section className="order-step">
+        <div className="order-setup-pane">
+          <section className="order-step customer-details-step setup-customer-step">
             <p>Step 1</p>
+            <h3>Customer details</h3>
+            <div className="two-column-fields customer-field-grid">
+              <label>
+                Name
+                <input name="customer_name" required />
+              </label>
+              <label>
+                Phone
+                <input name="customer_phone" type="tel" required />
+              </label>
+              <label>
+                Email
+                <input name="customer_email" type="email" />
+              </label>
+              <label>
+                Allergy notes
+                <input name="allergy_notes" />
+              </label>
+            </div>
+            <label>
+              Order notes
+              <textarea name="customer_notes" rows={3} />
+            </label>
+          </section>
+
+          <section className="order-step order-type-step">
+            <p>Step 2</p>
             <h3>Select order type</h3>
             <div className="segmented-grid order-type-tabs" role="tablist" aria-label="Order type">
               {orderTypes.map((type, index) => (
@@ -376,8 +403,8 @@ export default function OrderForm({
             </div>
           </section>
 
-          <section className="order-step">
-            <p>Step 2</p>
+          <section className="order-step date-step">
+            <p>Step 3</p>
             <h3>Select date or plan window</h3>
             {orderType === "daily" ? (
               <label>
@@ -452,10 +479,74 @@ export default function OrderForm({
               </label>
             ) : null}
           </section>
+
+          <section className="order-step fulfillment-step setup-fulfillment-step">
+            <p>Step 4</p>
+            <h3>Fulfillment</h3>
+            <div className="segmented-grid fulfillment-grid" role="tablist" aria-label="Fulfillment method">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={fulfillment === "pickup"}
+                className={fulfillment === "pickup" ? "selected" : undefined}
+                onClick={() => setFulfillment("pickup")}
+              >
+                <strong>Pickup</strong>
+                <span>Available</span>
+              </button>
+              {deliveryEnabled ? (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={fulfillment === "delivery"}
+                  className={fulfillment === "delivery" ? "selected" : undefined}
+                  onClick={() => setFulfillment("delivery")}
+                >
+                  <strong>Delivery</strong>
+                  <span>{settings.delivery_service_area_note || "Address required"}</span>
+                </button>
+              ) : null}
+            </div>
+            <input type="hidden" name="fulfillment_method" value={fulfillment} />
+            {!deliveryEnabled ? (
+              <p className="pickup-note">Pickup only.</p>
+            ) : null}
+            {fulfillment === "pickup" ? (
+              <label>
+                Pickup slot
+                <select name="pickup_slot_id" value={slotId} onChange={(event) => setSlotId(event.target.value)}>
+                  {pickupSlots.map((slot) => (
+                    <option key={slot.id} value={slot.id}>
+                      {slot.name} ({slot.start_time}-{slot.end_time})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <div className="two-column-fields">
+                <label>
+                  Delivery address
+                  <input name="delivery_address" required={fulfillment === "delivery"} />
+                </label>
+                <label>
+                  City
+                  <input name="delivery_city" required={fulfillment === "delivery"} />
+                </label>
+                <label>
+                  Postal code
+                  <input name="delivery_postal_code" required={fulfillment === "delivery"} />
+                </label>
+                <label>
+                  Instructions
+                  <input name="delivery_instructions" />
+                </label>
+              </div>
+            )}
+          </section>
         </div>
 
         <section className="order-step menu-order-step">
-          <p>Step 3</p>
+          <p>Step 5</p>
           <h3>Available menu</h3>
           {showPlans && visiblePlans.length > 0 ? (
             <div className="menu-section">
@@ -606,99 +697,6 @@ export default function OrderForm({
             </div>
           ) : null}
         </section>
-
-        <div className="order-bottom-grid">
-          <section className="order-step customer-details-step">
-            <p>Step 4</p>
-            <h3>Customer details</h3>
-            <div className="two-column-fields">
-              <label>
-                Name
-                <input name="customer_name" required />
-              </label>
-              <label>
-                Phone
-                <input name="customer_phone" type="tel" required />
-              </label>
-              <label>
-                Email
-                <input name="customer_email" type="email" />
-              </label>
-              <label>
-                Allergy notes
-                <input name="allergy_notes" />
-              </label>
-            </div>
-            <label>
-              Order notes
-              <textarea name="customer_notes" rows={4} />
-            </label>
-          </section>
-
-          <section className="order-step fulfillment-step">
-            <p>Step 5</p>
-            <h3>Fulfillment</h3>
-            <div className="segmented-grid fulfillment-grid" role="tablist" aria-label="Fulfillment method">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={fulfillment === "pickup"}
-                className={fulfillment === "pickup" ? "selected" : undefined}
-                onClick={() => setFulfillment("pickup")}
-              >
-                <strong>Pickup</strong>
-                <span>Available</span>
-              </button>
-              {deliveryEnabled ? (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={fulfillment === "delivery"}
-                  className={fulfillment === "delivery" ? "selected" : undefined}
-                  onClick={() => setFulfillment("delivery")}
-                >
-                  <strong>Delivery</strong>
-                  <span>{settings.delivery_service_area_note || "Address required"}</span>
-                </button>
-              ) : null}
-            </div>
-            <input type="hidden" name="fulfillment_method" value={fulfillment} />
-            {!deliveryEnabled ? (
-              <p className="pickup-note">Pickup only.</p>
-            ) : null}
-            {fulfillment === "pickup" ? (
-              <label>
-                Pickup slot
-                <select name="pickup_slot_id" value={slotId} onChange={(event) => setSlotId(event.target.value)}>
-                  {pickupSlots.map((slot) => (
-                    <option key={slot.id} value={slot.id}>
-                      {slot.name} ({slot.start_time}-{slot.end_time})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <div className="two-column-fields">
-                <label>
-                  Delivery address
-                  <input name="delivery_address" required={fulfillment === "delivery"} />
-                </label>
-                <label>
-                  City
-                  <input name="delivery_city" required={fulfillment === "delivery"} />
-                </label>
-                <label>
-                  Postal code
-                  <input name="delivery_postal_code" required={fulfillment === "delivery"} />
-                </label>
-                <label>
-                  Instructions
-                  <input name="delivery_instructions" />
-                </label>
-              </div>
-            )}
-          </section>
-        </div>
       </div>
 
       <aside className="checkout-panel order-summary-panel">
