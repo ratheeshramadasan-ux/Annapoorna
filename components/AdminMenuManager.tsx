@@ -87,6 +87,16 @@ function plainText(value?: string | null) {
     .trim();
 }
 
+function safeMenuImageUrl(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith("data:image") || value.length > 500) {
+    return "/assets/veg-thali.png";
+  }
+  return value;
+}
+
 export default function AdminMenuManager({
   saved,
   savedItemId,
@@ -268,6 +278,7 @@ export default function AdminMenuManager({
                 const regularPrice = priceForItem(prices, item.id, "regular");
                 const bulkPrice = priceForItem(prices, item.id, "bulk");
                 const isSelected = selectedItem?.id === item.id;
+                const imageUrl = safeMenuImageUrl(item.image_url);
                 return (
                   <button
                     key={item.id}
@@ -276,9 +287,9 @@ export default function AdminMenuManager({
                     onClick={() => setSelectedItemId(item.id)}
                   >
                     <span className="admin-menu-card-image">
-                      {item.image_url ? (
+                      {imageUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={item.image_url} alt="" />
+                        <img src={imageUrl} alt="" />
                       ) : (
                         <span>No image</span>
                       )}

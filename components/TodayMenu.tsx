@@ -12,6 +12,16 @@ type MenuItem = {
   food_type: string;
 };
 
+function safeMenuImageUrl(value?: string | null) {
+  if (!value) {
+    return "/assets/veg-thali.png";
+  }
+  if (value.startsWith("data:image") || value.length > 500) {
+    return "/assets/veg-thali.png";
+  }
+  return value;
+}
+
 export default function TodayMenu() {
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,7 +77,7 @@ export default function TodayMenu() {
                 className="rounded-2xl bg-white shadow-sm overflow-hidden border"
               >
                 <img
-                  src={item.image_url}
+                  src={safeMenuImageUrl(item.image_url)}
                   alt={item.name}
                   className="h-56 w-full object-cover"
                 />

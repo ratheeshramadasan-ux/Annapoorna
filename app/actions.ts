@@ -67,6 +67,16 @@ function sanitizeRichText(value: string | null) {
     .trim() || null;
 }
 
+function normalizeStoredImageUrl(value: string | null) {
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith("data:image") || value.length > 500) {
+    return "/assets/veg-thali.png";
+  }
+  return value;
+}
+
 function adminOrdersRedirect(formData: FormData, saved: string) {
   const params = new URLSearchParams({ saved });
   const from = optionalString(formData, "from");
@@ -1773,7 +1783,7 @@ export async function updateMenuItem(formData: FormData) {
   const categoryId = Number(requiredString(formData, "category_id"));
   const name = requiredString(formData, "name");
   const description = sanitizeRichText(optionalString(formData, "description"));
-  const imageUrl = optionalString(formData, "image_url");
+  const imageUrl = normalizeStoredImageUrl(optionalString(formData, "image_url"));
   const foodType = requiredString(formData, "food_type");
   const priceCents = Math.max(0, Math.round(Number(formData.get("regular_price") || formData.get("price") || 0) * 100));
   const isPublic = formData.get("is_public") === "on" ? 1 : 0;
@@ -1829,6 +1839,7 @@ export async function addMenuItem(formData: FormData) {
   const categoryId = Number(requiredString(formData, "category_id"));
   const name = requiredString(formData, "name");
   const description = sanitizeRichText(optionalString(formData, "description"));
+  const imageUrl = normalizeStoredImageUrl(optionalString(formData, "image_url"));
   const foodType = requiredString(formData, "food_type");
   const priceCents = Math.max(0, Math.round(Number(formData.get("regular_price") || formData.get("price") || 0) * 100));
   const bulkEligible = formData.get("bulk_order_eligible") === "on" ? 1 : 0;
@@ -1845,7 +1856,7 @@ export async function addMenuItem(formData: FormData) {
       categoryId,
       name,
       description,
-      optionalString(formData, "image_url"),
+      imageUrl,
       priceCents,
       requiredString(formData, "serving_unit"),
       optionalString(formData, "serving_definition"),

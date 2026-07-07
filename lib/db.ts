@@ -544,6 +544,16 @@ function settingLines(settings: Record<string, string>, key: string, fallback: s
   return lines.length > 0 ? lines : fallback;
 }
 
+function safeMenuImageUrl(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith("data:image") || value.length > 500) {
+    return "/assets/veg-thali.png";
+  }
+  return value;
+}
+
 export async function getHomeContent() {
   const settings = await getSettings();
   return {
@@ -597,7 +607,11 @@ export async function getPublicMenu() {
            mi.description,
            mi.food_type,
            mi.base_price_cents,
-           mi.image_url,
+           CASE
+             WHEN mi.image_url LIKE 'data:image%' OR length(mi.image_url) > 500
+             THEN '/assets/veg-thali.png'
+             ELSE mi.image_url
+           END AS image_url,
            mi.is_active,
            mi.is_public,
            mi.public_sold_out,
@@ -656,7 +670,10 @@ export async function getPublicMenu() {
 
   return {
     categories,
-    items,
+    items: items.map((item) => ({
+      ...item,
+      image_url: safeMenuImageUrl(item.image_url),
+    })),
     availability,
     prices,
     thaliPlans,
@@ -678,7 +695,31 @@ export async function getAdminMenuData() {
          ORDER BY sort_order, name`,
       ),
       all<MenuItem>(
-        `SELECT mi.*, mc.name AS category_name
+        `SELECT
+           mi.id,
+           mi.category_id,
+           mc.name AS category_name,
+           mi.name,
+           mi.description,
+           mi.food_type,
+           mi.base_price_cents,
+           CASE
+             WHEN mi.image_url LIKE 'data:image%' OR length(mi.image_url) > 500
+             THEN '/assets/veg-thali.png'
+             ELSE mi.image_url
+           END AS image_url,
+           mi.is_active,
+           mi.is_public,
+           mi.public_sold_out,
+           mi.sort_order,
+           mi.serving_unit,
+           mi.serving_definition,
+           mi.bulk_order_eligible,
+           mi.min_bulk_quantity,
+           mi.max_bulk_quantity,
+           mi.bulk_notice_hours,
+           mi.menu_start_date,
+           mi.menu_end_date
          FROM menu_items mi
          LEFT JOIN menu_categories mc ON mc.id = mi.category_id
          ORDER BY COALESCE(mc.sort_order, 99), mi.sort_order, mi.name`,
@@ -703,7 +744,17 @@ export async function getAdminMenuData() {
       ),
     ]);
 
-  return { categories, items, availability, prices, ingredients, recipes };
+  return {
+    categories,
+    items: items.map((item) => ({
+      ...item,
+      image_url: safeMenuImageUrl(item.image_url),
+    })),
+    availability,
+    prices,
+    ingredients,
+    recipes,
+  };
 }
 
 export async function getOrderByNumber(orderNumber: string) {
