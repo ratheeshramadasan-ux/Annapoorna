@@ -7,6 +7,7 @@ const adminLinks = [
   { href: "/admin/menu", label: "Menu" },
   { href: "/admin/pricing", label: "Pricing" },
   { href: "/admin/orders", label: "Orders" },
+  { href: "/admin/prep", label: "Prep Plan" },
   { href: "/admin/payments", label: "Payments" },
   { href: "/admin/holidays", label: "Holidays" },
   { href: "/admin/reviews", label: "Reviews" },
