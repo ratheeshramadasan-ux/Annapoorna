@@ -901,8 +901,7 @@ label:has(textarea[required])::after {
 
 .order-summary-panel {
   position: static;
-  order: -1;
-  grid-template-columns: minmax(120px, auto) minmax(0, 1fr) minmax(170px, auto);
+  grid-template-columns: minmax(110px, auto) minmax(0, 1fr) minmax(170px, auto);
   align-items: center;
 }
 
