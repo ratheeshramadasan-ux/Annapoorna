@@ -1,4 +1,4 @@
-name = "annapoorna-website"
+name = "annapoorna"
 main = ".open-next/worker.js"
 compatibility_date = "2026-07-05"
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
@@ -9,7 +9,7 @@ binding = "ASSETS"
 
 [[services]]
 binding = "WORKER_SELF_REFERENCE"
-service = "annapoorna-website"
+service = "annapoorna"
 
 [[d1_databases]]
 binding = "DB"

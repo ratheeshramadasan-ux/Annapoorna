@@ -354,41 +354,6 @@ export default function OrderForm({
       ) : null}
 
       <div className="order-main-column">
-        <aside className="checkout-panel order-summary-panel">
-          <p>Step 6</p>
-          <h3>Summary</h3>
-          <div className="line-list">
-            <div>
-              <span>Order type</span>
-              <strong>{orderType}</strong>
-            </div>
-            <div>
-              <span>Date</span>
-              <strong>{formatPickupDate(selectedDate)}</strong>
-            </div>
-            <div>
-              <span>Fulfillment</span>
-              <strong>{fulfillment}</strong>
-            </div>
-            {summary.lines.map((line) => (
-              <div key={line.id}>
-                <span>
-                  {line.quantity} x {line.name}
-                </span>
-                <strong>{formatMoney(line.quantity * line.price)}</strong>
-              </div>
-            ))}
-          </div>
-          <div className="order-total">
-            <span>Total amount</span>
-            <strong>{formatMoney(summary.total)}</strong>
-          </div>
-          <button className="gold-button full-button" type="submit" disabled={isSubmitting || Boolean(selectedHoliday)}>
-            {isSubmitting ? "Submitting..." : "Submit Order"}
-          </button>
-          <p className="fine-print">Orders are created as pending for confirmation.</p>
-        </aside>
-
         <div className="order-setup-pane">
           <section className="order-step customer-details-step setup-customer-step">
             <p>Step 1</p>
@@ -580,8 +545,43 @@ export default function OrderForm({
           </section>
         </div>
 
-        <section className="order-step menu-order-step">
+        <aside className="checkout-panel order-summary-panel">
           <p>Step 5</p>
+          <h3>Summary</h3>
+          <div className="line-list">
+            <div>
+              <span>Order type</span>
+              <strong>{orderType}</strong>
+            </div>
+            <div>
+              <span>Date</span>
+              <strong>{formatPickupDate(selectedDate)}</strong>
+            </div>
+            <div>
+              <span>Fulfillment</span>
+              <strong>{fulfillment}</strong>
+            </div>
+            {summary.lines.map((line) => (
+              <div key={line.id}>
+                <span>
+                  {line.quantity} x {line.name}
+                </span>
+                <strong>{formatMoney(line.quantity * line.price)}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="order-total">
+            <span>Total amount</span>
+            <strong>{formatMoney(summary.total)}</strong>
+          </div>
+          <button className="gold-button full-button" type="submit" disabled={isSubmitting || Boolean(selectedHoliday)}>
+            {isSubmitting ? "Submitting..." : "Submit Order"}
+          </button>
+          <p className="fine-print">Orders are created as pending for confirmation.</p>
+        </aside>
+
+        <section className="order-step menu-order-step">
+          <p>Step 6</p>
           <h3>Available menu</h3>
           {showPlans && visiblePlans.length > 0 ? (
             <div className="menu-section">

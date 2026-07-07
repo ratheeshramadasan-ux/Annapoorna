@@ -627,11 +627,6 @@ a {
   opacity: 0.48;
 }
 
-.order-summary-panel {
-  position: sticky;
-  top: 18px;
-}
-
 .menu-section,
 .confirmation-card,
 .form-panel,
@@ -903,6 +898,7 @@ label:has(textarea[required])::after {
   position: static;
   grid-template-columns: minmax(110px, auto) minmax(0, 1fr) minmax(170px, auto);
   align-items: center;
+  width: 100%;
 }
 
 .order-summary-panel > p,
@@ -2118,7 +2114,6 @@ th {
 
   .order-summary-panel {
     position: static;
-    order: -1;
     grid-template-columns: 1fr;
   }
 
