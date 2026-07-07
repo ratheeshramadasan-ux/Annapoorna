@@ -42,3 +42,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .aider*
+
+.open-next/
+.next/
+dist/
+dev-server.log
+dev-server.err.log
+db/backups/
