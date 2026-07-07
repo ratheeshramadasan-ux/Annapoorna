@@ -67,12 +67,38 @@ function sanitizeRichText(value: string | null) {
     .trim() || null;
 }
 
-function normalizeStoredImageUrl(value: string | null) {
+const menuAssetByName: Array<[RegExp, string]> = [
+  [/veg thali|regular veg thali|daily veg thali/i, "/assets/veg-thali.png"],
+  [/non[- ]?veg thali|chicken thali/i, "/assets/nonveg-thali.png"],
+  [/butter chicken/i, "/assets/Butter Chicken.png"],
+  [/chicken biryani/i, "/assets/Chicken Biryani.jpeg"],
+  [/chicken puff/i, "/assets/Chicken Puff.png"],
+  [/dal.*vada|parippu.*vada/i, "/assets/Dal Vada.png"],
+  [/egg puff/i, "/assets/Egg Puff.png"],
+  [/ghee roast/i, "/assets/Ghee roast .png"],
+  [/idli sambar/i, "/assets/Idli Sambar.png"],
+  [/idli.*dosa.*batter/i, "/assets/Idli-dosa batter.png"],
+  [/kerala chicken biryani/i, "/assets/Kerala Chicken Biryani.png"],
+  [/kerala mutton biryani/i, "/assets/Kerala Mutton Biryani.png"],
+  [/medu vada batter|medu vada battter/i, "/assets/Medu Vada Battter.png"],
+  [/medu vada/i, "/assets/Medu Vada.png"],
+  [/onion pakora|onion pakoda/i, "/assets/Onion Pakoda.png"],
+  [/pahadi chicken/i, "/assets/Pahadi Chicken curry.png"],
+  [/put kadala/i, "/assets/Put Kadala.jpeg"],
+  [/puttu.*kadala/i, "/assets/Puttu and Kadala Curry.png"],
+  [/sabudana vada/i, "/assets/Sabudana Vada.png"],
+];
+
+function imageUrlForMenuName(name: string) {
+  return menuAssetByName.find(([pattern]) => pattern.test(name))?.[1] ?? null;
+}
+
+function normalizeStoredImageUrl(value: string | null, itemName: string) {
   if (!value) {
-    return null;
+    return imageUrlForMenuName(itemName);
   }
   if (value.startsWith("data:image") || value.length > 500) {
-    return "/assets/veg-thali.png";
+    return imageUrlForMenuName(itemName);
   }
   return value;
 }
@@ -1783,7 +1809,7 @@ export async function updateMenuItem(formData: FormData) {
   const categoryId = Number(requiredString(formData, "category_id"));
   const name = requiredString(formData, "name");
   const description = sanitizeRichText(optionalString(formData, "description"));
-  const imageUrl = normalizeStoredImageUrl(optionalString(formData, "image_url"));
+  const imageUrl = normalizeStoredImageUrl(optionalString(formData, "image_url"), name);
   const foodType = requiredString(formData, "food_type");
   const priceCents = Math.max(0, Math.round(Number(formData.get("regular_price") || formData.get("price") || 0) * 100));
   const isPublic = formData.get("is_public") === "on" ? 1 : 0;
@@ -1839,7 +1865,7 @@ export async function addMenuItem(formData: FormData) {
   const categoryId = Number(requiredString(formData, "category_id"));
   const name = requiredString(formData, "name");
   const description = sanitizeRichText(optionalString(formData, "description"));
-  const imageUrl = normalizeStoredImageUrl(optionalString(formData, "image_url"));
+  const imageUrl = normalizeStoredImageUrl(optionalString(formData, "image_url"), name);
   const foodType = requiredString(formData, "food_type");
   const priceCents = Math.max(0, Math.round(Number(formData.get("regular_price") || formData.get("price") || 0) * 100));
   const bulkEligible = formData.get("bulk_order_eligible") === "on" ? 1 : 0;

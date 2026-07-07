@@ -1,46 +1,28 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 
-const maxImageDimension = 900;
-const jpegQuality = 0.78;
-
-function readAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-function loadImage(src: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = src;
-  });
-}
-
-async function compressImage(file: File) {
-  const dataUrl = await readAsDataUrl(file);
-  const image = await loadImage(dataUrl);
-  const scale = Math.min(1, maxImageDimension / Math.max(image.width, image.height));
-  const width = Math.max(1, Math.round(image.width * scale));
-  const height = Math.max(1, Math.round(image.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return dataUrl;
-  }
-  context.fillStyle = "#fffefb";
-  context.fillRect(0, 0, width, height);
-  context.drawImage(image, 0, 0, width, height);
-  return canvas.toDataURL("image/jpeg", jpegQuality);
-}
+const assetOptions = [
+  "/assets/veg-thali.png",
+  "/assets/nonveg-thali.png",
+  "/assets/Butter Chicken.png",
+  "/assets/Chicken Biryani.jpeg",
+  "/assets/Chicken Puff.png",
+  "/assets/Dal Vada.png",
+  "/assets/Egg Puff.png",
+  "/assets/Ghee roast .png",
+  "/assets/Idli Sambar.png",
+  "/assets/Idli-dosa batter.png",
+  "/assets/Kerala Chicken Biryani.png",
+  "/assets/Kerala Mutton Biryani.png",
+  "/assets/Medu Vada.png",
+  "/assets/Medu Vada Battter.png",
+  "/assets/Onion Pakoda.png",
+  "/assets/Pahadi Chicken curry.png",
+  "/assets/Put Kadala.jpeg",
+  "/assets/Puttu and Kadala Curry.png",
+  "/assets/Sabudana Vada.png",
+];
 
 export default function ImageUploadField({
   name,
@@ -53,7 +35,6 @@ export default function ImageUploadField({
 }) {
   const [value, setValue] = useState(defaultValue);
   const [status, setStatus] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
 
   return (
     <div className="image-upload-field">
@@ -67,36 +48,32 @@ export default function ImageUploadField({
         )}
       </div>
       <div className="image-upload-controls">
-        <button type="button" onClick={() => inputRef.current?.click()}>
-          Upload {label}
-        </button>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          onChange={async (event) => {
-            const file = event.target.files?.[0];
-            if (!file) {
-              return;
-            }
-            setStatus("Preparing image...");
-            try {
-              const compressed = await compressImage(file);
-              setValue(compressed);
-              setStatus("Image ready");
-            } catch {
-              setStatus("Could not prepare image. Try a smaller file.");
-            } finally {
-              event.target.value = "";
-            }
+        <select
+          value={assetOptions.includes(value) ? value : ""}
+          onChange={(event) => {
+            setValue(event.target.value);
+            setStatus(event.target.value ? "Image selected" : "");
           }}
-        />
+        >
+          <option value="">Choose existing image</option>
+          {assetOptions.map((asset) => (
+            <option key={asset} value={asset}>
+              {asset.replace("/assets/", "")}
+            </option>
+          ))}
+        </select>
         <input
           type="text"
-          value={value.startsWith("data:") ? "Uploaded image selected" : value}
+          value={value}
           placeholder="/assets/veg-thali.png"
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => {
+            setValue(event.target.value);
+            setStatus("");
+          }}
         />
+        <span className="image-upload-status">
+          Store image paths only. Add new files under public/assets before using them here.
+        </span>
         {status ? <span className="image-upload-status">{status}</span> : null}
       </div>
     </div>
