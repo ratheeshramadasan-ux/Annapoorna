@@ -45,24 +45,29 @@ export default async function AdminDashboardPage({
     );
   }
 
-  const [pending, pickups, revenue, menu, customers] = await Promise.all([
+  const [pending, pickups, amountReceived, expenses, menu, customers] = await Promise.all([
     all<Metric>("SELECT COUNT(*) AS value FROM orders WHERE status LIKE 'pending%'"),
     all<Metric>(
       "SELECT COUNT(*) AS value FROM orders WHERE pickup_date = date('now')",
     ),
     all<Metric>(
-      "SELECT COALESCE(SUM(total_cents), 0) AS value FROM orders WHERE payment_status IN ('paid', 'verified')",
+      "SELECT COALESCE(SUM(received_amount_cents), 0) AS value FROM payments WHERE payment_status IN ('partial', 'paid', 'verified')",
     ),
+    all<Metric>("SELECT COALESCE(SUM(amount_cents), 0) AS value FROM expenses"),
     all<Metric>(
       "SELECT COUNT(*) AS value FROM menu_items WHERE is_active = 1 AND is_public = 1",
     ),
     all<Metric>("SELECT COUNT(*) AS value FROM customers"),
   ]);
+  const receivedCents = amountReceived[0]?.value ?? 0;
+  const expenseCents = expenses[0]?.value ?? 0;
 
   const cards = [
     { label: "Pending orders", value: pending[0]?.value ?? 0 },
     { label: "Today pickups", value: pickups[0]?.value ?? 0 },
-    { label: "Revenue", value: formatMoney(revenue[0]?.value ?? 0) },
+    { label: "Total amount received", value: formatMoney(receivedCents) },
+    { label: "Total expense", value: formatMoney(expenseCents) },
+    { label: "Revenue", value: formatMoney(receivedCents - expenseCents) },
     { label: "Public menu items", value: menu[0]?.value ?? 0 },
     { label: "Customers", value: customers[0]?.value ?? 0 },
   ];

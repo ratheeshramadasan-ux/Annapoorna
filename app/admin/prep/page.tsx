@@ -63,6 +63,15 @@ function orderAppliesToRange(order: PrepOrder, from: string, to: string) {
     .some((date) => date >= from && date <= to);
 }
 
+function orderDatesInRange(order: PrepOrder, from: string, to: string) {
+  const dates = new Set(
+    [order.pickup_date, ...(order.selected_days ?? "").split(",")]
+      .map((date) => date.trim())
+      .filter((date) => date >= from && date <= to),
+  );
+  return Array.from(dates).sort();
+}
+
 export default async function AdminPrepPage({
   searchParams,
 }: {
@@ -101,9 +110,11 @@ export default async function AdminPrepPage({
   const itemTotals = Array.from(
     items
       .reduce((map, item) => {
+        const order = orders.find((entry) => entry.id === item.order_id);
+        const dateCount = order ? Math.max(1, orderDatesInRange(order, range.from, range.to).length) : 1;
         map.set(
           item.item_name_snapshot,
-          (map.get(item.item_name_snapshot) ?? 0) + Number(item.quantity || 0),
+          (map.get(item.item_name_snapshot) ?? 0) + Number(item.quantity || 0) * dateCount,
         );
         return map;
       }, new Map<string, number>())
@@ -178,7 +189,9 @@ export default async function AdminPrepPage({
               .filter(Boolean)
               .join(" / ");
             return [
-              `${formatPickupDate(order.pickup_date)} ${order.pickup_time}`,
+              `${orderDatesInRange(order, range.from, range.to)
+                .map(formatPickupDate)
+                .join(", ")} ${order.pickup_time}`,
               `${order.order_number} (${order.order_type})`,
               order.customer_name,
               [order.customer_phone, order.customer_email].filter(Boolean).join(" / "),

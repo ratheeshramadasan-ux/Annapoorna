@@ -60,11 +60,23 @@ export default async function ReviewsPage({
             </div>
           ) : (
             reviews.map((review) => (
-              <article key={review.id} className="review-card">
-                <strong>Rating {review.rating}/5</strong>
+              <details key={review.id} className="review-card collapsible-card" open>
+                <summary>
+                  Rating {review.rating}/5{review.source === "google" ? " on Google" : ""}
+                </summary>
                 <p>{review.comment}</p>
-                <span>{review.customer_name}</span>
-              </article>
+                <span>
+                  {review.customer_name}
+                  {review.external_review_url ? (
+                    <>
+                      {" "}
+                      <a href={review.external_review_url} target="_blank" rel="noreferrer">
+                        View
+                      </a>
+                    </>
+                  ) : null}
+                </span>
+              </details>
             ))
           )}
           {googleReviewUrl ? (

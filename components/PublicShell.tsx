@@ -1,5 +1,5 @@
-import Image from "next/image";
 import Link from "next/link";
+import { getSettings } from "@/lib/db";
 
 type PublicShellProps = {
   active?: "home" | "order" | "reviews" | "track";
@@ -31,12 +31,14 @@ export function PublicNav({ active }: { active?: PublicShellProps["active"] }) {
   );
 }
 
-export default function PublicShell({
+export default async function PublicShell({
   active,
   title,
   eyebrow,
   children,
 }: PublicShellProps) {
+  const settings = await getSettings().catch(() => ({} as Record<string, string>));
+  const brandIcon = settings.brand_icon_url || "/assets/brand-mark.jpg";
   return (
     <main className="home-shell">
       <section className="top-banner compact-banner">
@@ -45,13 +47,8 @@ export default function PublicShell({
           <p>Homemade Fresh Tiffin Service</p>
         </div>
         <div className="banner-logo">
-          <Image
-            src="/assets/brand-mark.jpg"
-            alt="Annapoorna logo"
-            width={120}
-            height={120}
-            priority
-          />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={brandIcon} alt="Annapoorna logo" />
         </div>
       </section>
       <PublicNav active={active} />

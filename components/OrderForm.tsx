@@ -688,6 +688,7 @@ export default function OrderForm({
                         <div>
                           <div className="menu-row-title">
                             <FoodTypeIcon type={item.food_type === "nonveg" ? "nonveg" : "veg"} />
+                            {item.icon_text ? <span className="menu-item-icon-badge">{item.icon_text}</span> : null}
                             <h4>{item.name}</h4>
                             {orderType === "bulk" ? <span>Bulk eligible</span> : null}
                           </div>

@@ -1,8 +1,10 @@
 import {
+  updateBrandingSettings,
   updateAdminAlertSettings,
   updateDeliverySettings,
   updateHomeContent,
   updateOrderNotificationSettings,
+  updatePaymentApprovalSettings,
   updateReviewSettings,
   updateSetting,
 } from "@/app/actions";
@@ -75,6 +77,72 @@ export default async function AdminSettingsPage({
       {params.saved === "order-messages" ? (
         <p className="admin-flash">Order message templates saved successfully.</p>
       ) : null}
+      {params.saved === "branding" ? (
+        <p className="admin-flash">Brand customization saved successfully.</p>
+      ) : null}
+      {params.saved === "payment-approval" ? (
+        <p className="admin-flash">Payment approval settings saved successfully.</p>
+      ) : null}
+      <form action={updateBrandingSettings} className="delivery-settings-card branding-settings-card">
+        <div>
+          <h3>Brand Customization</h3>
+          <p>Control the public site font, scale, background, and icon branding.</p>
+        </div>
+        <label>
+          Body font
+          <select name="brand_font_family" defaultValue={valueOrDefault("brand_font_family", "aptos")}>
+            <option value="aptos">Aptos / Segoe</option>
+            <option value="system">Modern system</option>
+            <option value="cambria">Cambria</option>
+            <option value="georgia">Georgia</option>
+          </select>
+        </label>
+        <label>
+          Heading font
+          <select name="brand_display_font" defaultValue={valueOrDefault("brand_display_font", "cambria")}>
+            <option value="cambria">Cambria</option>
+            <option value="georgia">Georgia</option>
+            <option value="aptos">Aptos / Segoe</option>
+            <option value="system">Modern system</option>
+          </select>
+        </label>
+        <label>
+          Font size
+          <input
+            name="brand_font_scale"
+            type="number"
+            min="90"
+            max="115"
+            step="1"
+            defaultValue={valueOrDefault("brand_font_scale", "100")}
+          />
+        </label>
+        <label>
+          Theme
+          <select name="brand_background_theme" defaultValue={valueOrDefault("brand_background_theme", "cream_gold")}>
+            <option value="cream_gold">Cream and gold</option>
+            <option value="porcelain">Porcelain</option>
+            <option value="graphite">Graphite</option>
+          </select>
+        </label>
+        <label className="wide-field">
+          Background image URL
+          <input
+            name="brand_background_image_url"
+            placeholder="/assets/Main Banner.png"
+            defaultValue={valueFor("brand_background_image_url")}
+          />
+        </label>
+        <label className="wide-field">
+          Icon branding URL
+          <input
+            name="brand_icon_url"
+            placeholder="/assets/brand-mark.jpg"
+            defaultValue={valueOrDefault("brand_icon_url", "/assets/brand-mark.jpg")}
+          />
+        </label>
+        <button type="submit">Save customization</button>
+      </form>
       <form action={updateDeliverySettings} className="delivery-settings-card">
         <div>
           <h3>Delivery Settings</h3>
@@ -108,6 +176,22 @@ export default async function AdminSettingsPage({
         <button type="submit">Save delivery settings</button>
       </form>
 
+      <form action={updatePaymentApprovalSettings} className="delivery-settings-card">
+        <div>
+          <h3>Payment Edit Approval</h3>
+          <p>Require a different admin to approve payment edits before they change records.</p>
+        </div>
+        <label className="checkbox-line">
+          <input
+            name="payment_edit_second_admin_approval_enabled"
+            type="checkbox"
+            defaultChecked={valueFor("payment_edit_second_admin_approval_enabled") === "true"}
+          />
+          Enable second-admin approval
+        </label>
+        <button type="submit">Save payment approval</button>
+      </form>
+
       <form action={updateReviewSettings} className="delivery-settings-card">
         <div>
           <h3>Review Settings</h3>
@@ -128,6 +212,30 @@ export default async function AdminSettingsPage({
             type="url"
             placeholder="https://g.page/r/..."
             defaultValue={valueFor("google_review_url")}
+          />
+        </label>
+        <label className="checkbox-line">
+          <input
+            name="google_reviews_sync_enabled"
+            type="checkbox"
+            defaultChecked={valueFor("google_reviews_sync_enabled") === "true"}
+          />
+          Sync Google reviews into portal
+        </label>
+        <label>
+          Google account ID
+          <input
+            name="google_account_id"
+            placeholder="1234567890"
+            defaultValue={valueFor("google_account_id")}
+          />
+        </label>
+        <label>
+          Google location ID
+          <input
+            name="google_location_id"
+            placeholder="9876543210"
+            defaultValue={valueFor("google_location_id")}
           />
         </label>
         <button type="submit">Save review settings</button>

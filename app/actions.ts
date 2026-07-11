@@ -97,8 +97,12 @@ function normalizeStoredImageUrl(value: string | null, itemName: string) {
   if (!value) {
     return imageUrlForMenuName(itemName);
   }
-  if (value.startsWith("data:image") || value.length > 500) {
-    return imageUrlForMenuName(itemName);
+  if (value.startsWith("data:")) {
+    const isSupportedImage =
+      /^data:image\/(?:webp|jpeg|png);base64,[a-z0-9+/=]+$/i.test(value);
+    if (!isSupportedImage || value.length > 220_000) {
+      throw new Error("Uploaded image is invalid or too large. Please select it again.");
+    }
   }
   return value;
 }
@@ -246,7 +250,7 @@ async function refreshCustomerRollup(db: D1DatabaseLike, customerId: number) {
            SELECT COALESCE(SUM(received_amount_cents), 0)
            FROM payments
            WHERE customer_id = ?
-             AND payment_status IN ('paid', 'verified')
+             AND payment_status IN ('partial', 'paid', 'verified')
          ),
          last_order_at = (
            SELECT MAX(created_at)
@@ -531,6 +535,22 @@ type QueuedNotification = {
   message: string;
 };
 
+type GoogleBusinessReview = {
+  name?: string;
+  reviewId?: string;
+  reviewer?: {
+    displayName?: string;
+    profilePhotoUrl?: string;
+  };
+  starRating?: string;
+  comment?: string;
+  createTime?: string;
+  updateTime?: string;
+  reviewReply?: {
+    comment?: string;
+  };
+};
+
 function textToHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
@@ -704,6 +724,128 @@ async function dispatchOrderNotifications(
       await dispatchWhatsAppNotification(db, notification);
     }
   }
+}
+
+function googleRatingToNumber(value: string | undefined) {
+  const normalized = (value ?? "").toUpperCase();
+  const ratings: Record<string, number> = {
+    ONE: 1,
+    TWO: 2,
+    THREE: 3,
+    FOUR: 4,
+    FIVE: 5,
+    STAR_RATING_UNSPECIFIED: 0,
+  };
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return Math.min(5, Math.max(1, numeric));
+  }
+  return ratings[normalized] || 5;
+}
+
+function googleBusinessProfileId(value: string | undefined, prefix: "accounts" | "locations") {
+  return (value ?? "").trim().replace(new RegExp(`^${prefix}/`, "i"), "");
+}
+
+async function getGoogleBusinessAccessToken() {
+  const env = await getRuntimeEnv(true);
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REFRESH_TOKEN) {
+    throw new Error(
+      "Google review sync needs GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN secrets.",
+    );
+  }
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_CLIENT_SECRET,
+      refresh_token: env.GOOGLE_REFRESH_TOKEN,
+      grant_type: "refresh_token",
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    access_token?: string;
+    error?: string;
+    error_description?: string;
+  };
+  if (!response.ok || !payload.access_token) {
+    throw new Error(
+      payload.error_description || payload.error || "Unable to refresh Google access token.",
+    );
+  }
+  return payload.access_token;
+}
+
+async function upsertGoogleBusinessReview(
+  db: D1DatabaseLike,
+  review: GoogleBusinessReview,
+  fallbackUrl: string,
+) {
+  const externalReviewId = review.reviewId || review.name?.split("/").pop();
+  if (!externalReviewId) {
+    return "skipped";
+  }
+  const rating = googleRatingToNumber(review.starRating);
+  const comment = review.comment?.trim() || `Google rating ${rating}/5`;
+  const customerName = review.reviewer?.displayName?.trim() || "Google reviewer";
+  const existing = await db
+    .prepare("SELECT id FROM reviews WHERE source = 'google' AND external_review_id = ? LIMIT 1")
+    .bind(externalReviewId)
+    .first<{ id: number }>();
+
+  if (existing) {
+    await db
+      .prepare(
+        `UPDATE reviews
+         SET customer_name = ?,
+             rating = ?,
+             comment = ?,
+             external_review_url = ?,
+             reviewer_avatar_url = ?,
+             google_create_time = ?,
+             google_update_time = ?,
+             google_reply = ?,
+             moderation_status = 'approved'
+         WHERE id = ?`,
+      )
+      .bind(
+        customerName,
+        rating,
+        comment,
+        fallbackUrl || null,
+        review.reviewer?.profilePhotoUrl ?? null,
+        review.createTime ?? null,
+        review.updateTime ?? review.createTime ?? null,
+        review.reviewReply?.comment ?? null,
+        existing.id,
+      )
+      .run();
+    return "updated";
+  }
+
+  await db
+    .prepare(
+      `INSERT INTO reviews
+       (customer_name, rating, comment, source, external_review_id, external_review_url,
+        reviewer_avatar_url, google_create_time, google_update_time, google_reply,
+        is_verified_customer, moderation_status)
+       VALUES (?, ?, ?, 'google', ?, ?, ?, ?, ?, ?, 0, 'approved')`,
+    )
+    .bind(
+      customerName,
+      rating,
+      comment,
+      externalReviewId,
+      fallbackUrl || null,
+      review.reviewer?.profilePhotoUrl ?? null,
+      review.createTime ?? null,
+      review.updateTime ?? review.createTime ?? null,
+      review.reviewReply?.comment ?? null,
+    )
+    .run();
+  return "inserted";
 }
 
 function datesOverlap(startA: string, endA: string, startB: string, endB: string) {
@@ -960,6 +1102,33 @@ function applyRule(
   };
 }
 
+function customerSpecialUnitPrice(
+  item: MenuItem,
+  quantity: number,
+  baseUnitPrice: number,
+  rules: PricingRule[],
+  serviceDate: string,
+) {
+  const rule = rules.find((candidate) => {
+    if (candidate.rule_type !== "customer" || quantity < (candidate.minimum_quantity ?? 0)) {
+      return false;
+    }
+    if (candidate.start_date && candidate.start_date > serviceDate) return false;
+    if (candidate.end_date && candidate.end_date < serviceDate) return false;
+    if (candidate.applies_to === "specific_item") return candidate.menu_item_id === item.id;
+    if (candidate.applies_to === "category") return candidate.category_id === item.category_id;
+    return candidate.applies_to === "all_items" || candidate.applies_to === "all";
+  });
+  if (!rule) return baseUnitPrice;
+  if (rule.pricing_method === "fixed_unit_price" && rule.fixed_unit_price_cents !== null) {
+    return rule.fixed_unit_price_cents;
+  }
+  if (rule.pricing_method === "percent_discount" && rule.discount_percent !== null) {
+    return Math.max(0, Math.round(baseUnitPrice * (1 - rule.discount_percent / 100)));
+  }
+  return baseUnitPrice;
+}
+
 export async function submitOrder(formData: FormData) {
   await ensureKitchenSchema();
   const db = await requireDb();
@@ -1114,14 +1283,37 @@ export async function submitOrder(formData: FormData) {
     }
   }
 
+  const customerId = await upsertCustomerForOrder(
+    db,
+    customerName,
+    customerEmail,
+    customerPhone,
+  );
+  const customerRulesResult = await db
+    .prepare(
+      `SELECT pr.*
+       FROM pricing_rules pr
+       JOIN pricing_rule_customers prc ON prc.pricing_rule_id = pr.id
+       WHERE prc.customer_id = ? AND pr.rule_type = 'customer' AND pr.is_active = 1
+       ORDER BY pr.priority DESC, pr.id DESC`,
+    )
+    .bind(customerId)
+    .all<PricingRule>();
+  const customerRules = customerRulesResult.results ?? [];
   const priced = selected.map(({ item, quantity }) => ({
     item,
     quantity,
-    unitPrice: effectivePrice(
-      prices,
+    unitPrice: customerSpecialUnitPrice(
+      item,
+      quantity,
+      effectivePrice(
+        prices,
+        selectedStartDate,
+        { menuItemId: item.id, priceType: orderType === "bulk" ? "bulk" : "regular" },
+        item.base_price_cents,
+      ),
+      customerRules,
       selectedStartDate,
-      { menuItemId: item.id, priceType: orderType === "bulk" ? "bulk" : "regular" },
-      item.base_price_cents,
     ),
   }));
   const pricedPlans = selectedPlans.map(({ plan, quantity }) => ({
@@ -1148,13 +1340,6 @@ export async function submitOrder(formData: FormData) {
   const status = "pending";
   const customerFacingStatus = requiresApproval ? "Pending approval" : "Order received";
   const createdOrderNumber = orderNumber();
-
-  const customerId = await upsertCustomerForOrder(
-    db,
-    customerName,
-    customerEmail,
-    customerPhone,
-  );
 
   const orderResult = await db
     .prepare(
@@ -1661,6 +1846,89 @@ export async function updateOrderStatus(formData: FormData) {
   adminOrdersRedirect(formData, "status");
 }
 
+export async function updateOrderDetails(formData: FormData) {
+  await requireAdminSession();
+  const orderId = Number(requiredString(formData, "order_id"));
+  const customerName = requiredString(formData, "customer_name");
+  const customerPhone = requiredString(formData, "customer_phone");
+  const customerEmail = optionalString(formData, "customer_email");
+  const pickupDate = requiredString(formData, "pickup_date");
+  const pickupTime = requiredString(formData, "pickup_time");
+  const fulfillmentMethod = requiredString(formData, "fulfillment_method");
+  const allergyNotes = optionalString(formData, "allergy_notes");
+  const customerNotes = optionalString(formData, "customer_notes");
+  const deliveryAddress = optionalString(formData, "delivery_address");
+  const deliveryCity = optionalString(formData, "delivery_city");
+  const deliveryPostalCode = optionalString(formData, "delivery_postal_code");
+  const deliveryInstructions = optionalString(formData, "delivery_instructions");
+  const selectedDays = optionalString(formData, "selected_days");
+  const db = await requireDb();
+  const order = await db
+    .prepare("SELECT customer_id FROM orders WHERE id = ?")
+    .bind(orderId)
+    .first<{ customer_id: number | null }>();
+  if (!order) {
+    throw new Error("Order not found.");
+  }
+
+  await db
+    .prepare(
+      `UPDATE orders
+       SET customer_name = ?,
+           customer_phone = ?,
+           customer_email = ?,
+           pickup_date = ?,
+           pickup_time = ?,
+           selected_days = ?,
+           fulfillment_method = ?,
+           delivery_address = ?,
+           delivery_city = ?,
+           delivery_postal_code = ?,
+           delivery_instructions = ?,
+           allergy_notes = ?,
+           customer_notes = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .bind(
+      customerName,
+      normalizePhone(customerPhone),
+      customerEmail,
+      pickupDate,
+      pickupTime,
+      selectedDays,
+      fulfillmentMethod,
+      fulfillmentMethod === "delivery" ? deliveryAddress : null,
+      fulfillmentMethod === "delivery" ? deliveryCity : null,
+      fulfillmentMethod === "delivery" ? deliveryPostalCode : null,
+      fulfillmentMethod === "delivery" ? deliveryInstructions : null,
+      allergyNotes,
+      customerNotes,
+      orderId,
+    )
+    .run();
+
+  if (order.customer_id) {
+    await db
+      .prepare(
+        `UPDATE customers
+         SET full_name = ?,
+             phone = ?,
+             email = COALESCE(?, email),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .bind(customerName, normalizePhone(customerPhone), customerEmail, order.customer_id)
+      .run();
+    await refreshCustomerRollup(db, order.customer_id);
+  }
+
+  revalidatePath("/admin/orders");
+  revalidatePath("/track-order");
+  revalidatePath("/admin/customers");
+  adminOrdersRedirect(formData, "details");
+}
+
 export async function updateOrderPayment(formData: FormData) {
   await requireAdminSession();
   const orderId = Number(requiredString(formData, "order_id"));
@@ -1689,15 +1957,17 @@ export async function updateOrderPayment(formData: FormData) {
     throw new Error("Order not found.");
   }
   const recordsPayment =
+    paymentStatus === "partial" ||
     paymentStatus === "paid" ||
     paymentStatus === "verified" ||
     paymentStatus === "refunded";
+  const isPartialPayment = paymentStatus === "partial";
   const expectedBeforeAdjustment = Math.max(
     order.total_cents + (order.discount_total_cents ?? 0),
     (order.subtotal_cents ?? 0) + (order.tax_total_cents ?? 0),
   );
   const reconciledDiscount =
-    recordsPayment && receivedAmountCents < expectedBeforeAdjustment
+    recordsPayment && !isPartialPayment && receivedAmountCents < expectedBeforeAdjustment
       ? expectedBeforeAdjustment - receivedAmountCents
       : 0;
   const excessReceived =
@@ -1705,11 +1975,13 @@ export async function updateOrderPayment(formData: FormData) {
       ? receivedAmountCents - expectedBeforeAdjustment
       : 0;
   const reconciledOrderTotal =
-    recordsPayment && receivedAmountCents < expectedBeforeAdjustment
+    recordsPayment && !isPartialPayment && receivedAmountCents < expectedBeforeAdjustment
       ? receivedAmountCents
       : expectedBeforeAdjustment || order.total_cents || 0;
   const reconciliationNote =
-    excessReceived > 0
+    isPartialPayment
+      ? `Partial payment: ${(receivedAmountCents / 100).toFixed(2)} of ${(expectedBeforeAdjustment / 100).toFixed(2)}`
+      : excessReceived > 0
       ? `Excess received: ${(excessReceived / 100).toFixed(2)}`
       : reconciledDiscount > 0
         ? `Short payment moved to discount: ${(reconciledDiscount / 100).toFixed(2)}`
@@ -1726,9 +1998,9 @@ export async function updateOrderPayment(formData: FormData) {
     )
     .bind(
       paymentStatus,
-      recordsPayment ? reconciledDiscount : (order.discount_total_cents ?? 0),
-      recordsPayment ? reconciledOrderTotal : (order.total_cents ?? 0),
-      (recordsPayment ? reconciledOrderTotal : (order.total_cents ?? 0)) / 100,
+      recordsPayment && !isPartialPayment ? reconciledDiscount : (order.discount_total_cents ?? 0),
+      recordsPayment && !isPartialPayment ? reconciledOrderTotal : (order.total_cents ?? 0),
+      (recordsPayment && !isPartialPayment ? reconciledOrderTotal : (order.total_cents ?? 0)) / 100,
       orderId,
     )
     .run();
@@ -2002,6 +2274,7 @@ export async function updateMenuItem(formData: FormData) {
   const name = requiredString(formData, "name");
   const description = sanitizeRichText(optionalString(formData, "description"));
   const imageUrl = normalizeStoredImageUrl(optionalString(formData, "image_url"), name);
+  const iconText = optionalString(formData, "icon_text");
   const foodType = requiredString(formData, "food_type");
   const priceCents = Math.max(0, Math.round(Number(formData.get("regular_price") || formData.get("price") || 0) * 100));
   const isPublic = formData.get("is_public") === "on" ? 1 : 0;
@@ -2013,6 +2286,7 @@ export async function updateMenuItem(formData: FormData) {
     .prepare(
       `UPDATE menu_items
        SET category_id = ?, name = ?, description = ?, image_url = ?,
+           icon_text = ?,
            base_price_cents = ?, serving_unit = ?, serving_definition = ?,
            bulk_order_eligible = ?, min_bulk_quantity = ?, max_bulk_quantity = ?,
            bulk_notice_hours = ?, menu_start_date = ?, menu_end_date = ?,
@@ -2026,6 +2300,7 @@ export async function updateMenuItem(formData: FormData) {
       name,
       description,
       imageUrl,
+      iconText,
       priceCents,
       requiredString(formData, "serving_unit"),
       optionalString(formData, "serving_definition"),
@@ -2058,23 +2333,25 @@ export async function addMenuItem(formData: FormData) {
   const name = requiredString(formData, "name");
   const description = sanitizeRichText(optionalString(formData, "description"));
   const imageUrl = normalizeStoredImageUrl(optionalString(formData, "image_url"), name);
+  const iconText = optionalString(formData, "icon_text");
   const foodType = requiredString(formData, "food_type");
   const priceCents = Math.max(0, Math.round(Number(formData.get("regular_price") || formData.get("price") || 0) * 100));
   const bulkEligible = formData.get("bulk_order_eligible") === "on" ? 1 : 0;
   await db
     .prepare(
       `INSERT INTO menu_items
-       (category_id, name, description, image_url, base_price_cents,
+       (category_id, name, description, image_url, icon_text, base_price_cents,
         serving_unit, serving_definition, bulk_order_eligible, min_bulk_quantity,
         max_bulk_quantity, bulk_notice_hours, menu_start_date, menu_end_date,
         is_active, is_public, food_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?)`,
     )
     .bind(
       categoryId,
       name,
       description,
       imageUrl,
+      iconText,
       priceCents,
       requiredString(formData, "serving_unit"),
       optionalString(formData, "serving_definition"),
@@ -2221,12 +2498,69 @@ export async function updateHomeContent(formData: FormData) {
   revalidatePath("/admin/settings");
 }
 
+export async function updateBrandingSettings(formData: FormData) {
+  await requireAdminSession();
+  const db = await requireDb();
+  const fontScale = Math.min(
+    115,
+    Math.max(90, Number(formData.get("brand_font_scale") || 100)),
+  );
+  const settings = [
+    ["brand_font_family", String(formData.get("brand_font_family") ?? "aptos"), "string"],
+    ["brand_display_font", String(formData.get("brand_display_font") ?? "cambria"), "string"],
+    ["brand_font_scale", String(Number.isFinite(fontScale) ? fontScale : 100), "number"],
+    ["brand_background_theme", String(formData.get("brand_background_theme") ?? "cream_gold"), "string"],
+    ["brand_background_image_url", String(formData.get("brand_background_image_url") ?? ""), "string"],
+    ["brand_icon_url", String(formData.get("brand_icon_url") ?? "/assets/brand-mark.jpg"), "string"],
+  ];
+  for (const [key, value, type] of settings) {
+    await db
+      .prepare(
+        `INSERT INTO app_settings (key, value, value_type, category, description, is_public)
+         VALUES (?, ?, ?, 'branding', ?, 1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .bind(key, value, type, key)
+      .run();
+  }
+  revalidatePath("/");
+  revalidatePath("/order");
+  revalidatePath("/reviews");
+  revalidatePath("/track-order");
+  revalidatePath("/admin/settings");
+  redirect("/admin/settings?saved=branding");
+}
+
+export async function updatePaymentApprovalSettings(formData: FormData) {
+  await requireAdminSession();
+  const db = await requireDb();
+  await db
+    .prepare(
+      `INSERT INTO app_settings (key, value, value_type, category, description, is_public)
+       VALUES ('payment_edit_second_admin_approval_enabled', ?, 'boolean', 'payments',
+               'Require a second admin to approve payment edits', 0)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+    )
+    .bind(formData.get("payment_edit_second_admin_approval_enabled") === "on" ? "true" : "false")
+    .run();
+  revalidatePath("/admin/settings");
+  revalidatePath("/admin/payments");
+  redirect("/admin/settings?saved=payment-approval");
+}
+
 export async function updateReviewSettings(formData: FormData) {
   await requireAdminSession();
   const db = await requireDb();
   const settings = [
     ["public_allow_reviews", formData.get("public_allow_reviews") === "on" ? "true" : "false", "boolean"],
     ["google_review_url", String(formData.get("google_review_url") ?? ""), "string"],
+    [
+      "google_reviews_sync_enabled",
+      formData.get("google_reviews_sync_enabled") === "on" ? "true" : "false",
+      "boolean",
+    ],
+    ["google_account_id", String(formData.get("google_account_id") ?? "").trim(), "string"],
+    ["google_location_id", String(formData.get("google_location_id") ?? "").trim(), "string"],
   ];
   for (const [key, value, type] of settings) {
     await db
@@ -2240,6 +2574,94 @@ export async function updateReviewSettings(formData: FormData) {
   }
   revalidatePath("/admin/settings");
   revalidatePath("/reviews");
+}
+
+export async function syncGoogleReviews() {
+  await requireAdminSession();
+  const db = await requireDb();
+  const settingsRows = await db.prepare("SELECT key, value FROM app_settings").all<{
+    key: string;
+    value: string;
+  }>();
+  const settings = Object.fromEntries(
+    (settingsRows.results ?? []).map((row) => [row.key, row.value]),
+  );
+
+  if (!settingBool(settings, "google_reviews_sync_enabled", false)) {
+    redirect("/admin/reviews?google=disabled");
+  }
+
+  const accountId = googleBusinessProfileId(settings.google_account_id, "accounts");
+  const locationId = googleBusinessProfileId(settings.google_location_id, "locations");
+  if (!accountId || !locationId) {
+    redirect("/admin/reviews?google=missing-location");
+  }
+
+  try {
+    const accessToken = await getGoogleBusinessAccessToken();
+    const url = new URL(
+      `https://mybusiness.googleapis.com/v4/accounts/${encodeURIComponent(
+        accountId,
+      )}/locations/${encodeURIComponent(locationId)}/reviews`,
+    );
+    url.searchParams.set("pageSize", "50");
+    url.searchParams.set("orderBy", "updateTime desc");
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      reviews?: GoogleBusinessReview[];
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new Error(payload.error?.message || "Google review sync failed.");
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    for (const review of payload.reviews ?? []) {
+      const result = await upsertGoogleBusinessReview(
+        db,
+        review,
+        settings.google_review_url ?? "",
+      );
+      if (result === "inserted") {
+        inserted += 1;
+      } else if (result === "updated") {
+        updated += 1;
+      }
+    }
+    const status = `Synced ${inserted} new and ${updated} existing Google reviews.`;
+    await db
+      .prepare(
+        `INSERT INTO app_settings (key, value, value_type, category, description, is_public)
+         VALUES ('google_reviews_last_sync_status', ?, 'string', 'reviews', 'Last Google review sync status', 0)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .bind(status)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO app_settings (key, value, value_type, category, description, is_public)
+         VALUES ('google_reviews_last_sync_at', CURRENT_TIMESTAMP, 'string', 'reviews', 'Last Google review sync time', 0)
+         ON CONFLICT(key) DO UPDATE SET value = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .run();
+    revalidatePath("/reviews");
+    revalidatePath("/admin/reviews");
+    redirect(`/admin/reviews?google=synced&inserted=${inserted}&updated=${updated}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await db
+      .prepare(
+        `INSERT INTO app_settings (key, value, value_type, category, description, is_public)
+         VALUES ('google_reviews_last_sync_status', ?, 'string', 'reviews', 'Last Google review sync status', 0)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .bind(message.slice(0, 500))
+      .run();
+    redirect(`/admin/reviews?google=failed`);
+  }
 }
 
 export async function updateAdminAlertSettings(formData: FormData) {
@@ -2558,6 +2980,7 @@ export async function addExpense(formData: FormData) {
 
 export async function addPricingRule(formData: FormData) {
   await requireAdminSession();
+  await ensureKitchenSchema();
   const db = await requireDb();
   const pricingMethod = requiredString(formData, "pricing_method");
   const fixedUnit =
@@ -2568,30 +2991,45 @@ export async function addPricingRule(formData: FormData) {
     pricingMethod === "percent_discount"
       ? Number(formData.get("discount_percent") ?? 0)
       : null;
-  await db
+  const ruleScope = optionalString(formData, "rule_scope") === "customer" ? "customer" : "bulk";
+  const result = await db
     .prepare(
       `INSERT INTO pricing_rules
        (name, description, rule_type, pricing_method, applies_to, menu_item_id,
         category_id, minimum_quantity, discount_percent, fixed_unit_price_cents,
         start_date, end_date, is_bulk_order, requires_admin_approval, is_public, auto_apply, is_active)
-       VALUES (?, ?, 'bulk', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, 1, 1)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1)`,
     )
     .bind(
       requiredString(formData, "name"),
       optionalString(formData, "description"),
+      ruleScope,
       pricingMethod,
       requiredString(formData, "applies_to"),
       Number(formData.get("menu_item_id") || 0) || null,
       Number(formData.get("category_id") || 0) || null,
-      Number(formData.get("minimum_quantity") ?? 2),
+      Number(formData.get("minimum_quantity") ?? (ruleScope === "customer" ? 1 : 2)),
       discountPercent,
       fixedUnit,
       optionalString(formData, "start_date"),
       optionalString(formData, "end_date"),
+      ruleScope === "bulk" ? 1 : 0,
       formData.get("requires_admin_approval") === "on" ? 1 : 0,
     )
     .run();
+  const ruleId = result.meta.last_row_id;
+  if (ruleId && ruleScope === "customer") {
+    for (const customerId of formData.getAll("customer_ids").map(Number).filter(Number.isInteger)) {
+      await db
+        .prepare(
+          "INSERT OR IGNORE INTO pricing_rule_customers (pricing_rule_id, customer_id) VALUES (?, ?)",
+        )
+        .bind(ruleId, customerId)
+        .run();
+    }
+  }
   revalidatePath("/admin/pricing");
+  revalidatePath("/admin/orders");
   revalidatePath("/order");
 }
 
@@ -2628,7 +3066,552 @@ export async function addThaliPlan(formData: FormData) {
       .run();
   }
   revalidatePath("/admin/pricing");
+  revalidatePath("/admin/orders");
   revalidatePath("/order");
+}
+
+export async function addCustomer(formData: FormData) {
+  await requireAdminSession();
+  const db = await requireDb();
+  const name = requiredString(formData, "customer_name");
+  const phone = normalizePhone(requiredString(formData, "customer_phone"));
+  const email = optionalString(formData, "customer_email");
+  const notes = optionalString(formData, "notes");
+  const requestedContact = optionalString(formData, "preferred_contact_method");
+  const preferredContact = ["whatsapp", "email", "phone"].includes(requestedContact ?? "")
+    ? requestedContact
+    : "whatsapp";
+
+  if (!phone) {
+    throw new Error("A valid customer phone number is required.");
+  }
+
+  const customerId = await upsertCustomerForOrder(db, name, email, phone);
+  await db
+    .prepare(
+      `UPDATE customers
+       SET preferred_contact_method = ?,
+           notes = COALESCE(?, notes),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .bind(preferredContact, notes, customerId)
+    .run();
+
+  revalidatePath("/admin/customers");
+  revalidatePath("/admin/payments");
+}
+
+export async function addHistoricalOrder(formData: FormData) {
+  await requireAdminSession();
+  const db = await requireDb();
+  const customerId = Number(requiredString(formData, "customer_id"));
+  const menuItemId = Number(requiredString(formData, "menu_item_id"));
+  const quantity = Math.max(1, Math.floor(Number(formData.get("quantity") ?? 1)));
+  const selectedDates = Array.from(
+    new Set(
+      requiredString(formData, "selected_dates")
+        .split(",")
+        .map((date) => date.trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+  const receivedCents = Math.round(Number(formData.get("received_amount") ?? 0) * 100);
+  const paymentMethod = requiredString(formData, "payment_method");
+  const notes = optionalString(formData, "notes");
+
+  if (!Number.isInteger(customerId) || customerId <= 0 ||
+      !Number.isInteger(menuItemId) || menuItemId <= 0) {
+    throw new Error("Please select a customer and menu item.");
+  }
+  if (selectedDates.length === 0 || selectedDates.length > 62 ||
+      selectedDates.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date))) {
+    throw new Error("Please select between 1 and 62 valid order dates.");
+  }
+  if (!Number.isFinite(quantity) || quantity < 1 ||
+      !Number.isFinite(receivedCents) || receivedCents < 0) {
+    throw new Error("Quantity and received amount must be valid.");
+  }
+
+  const [customer, item, availabilityResult, pricesResult, customerRulesResult] = await Promise.all([
+    db
+      .prepare("SELECT id, full_name, email, phone FROM customers WHERE id = ?")
+      .bind(customerId)
+      .first<{ id: number; full_name: string; email: string | null; phone: string }>(),
+    db
+      .prepare("SELECT * FROM menu_items WHERE id = ? AND is_active = 1")
+      .bind(menuItemId)
+      .first<MenuItem>(),
+    db
+      .prepare("SELECT * FROM menu_item_availability WHERE is_active = 1 AND menu_item_id = ?")
+      .bind(menuItemId)
+      .all<MenuAvailability>(),
+    db
+      .prepare(
+        `SELECT * FROM menu_prices
+         WHERE active = 1 AND menu_item_id = ? AND price_type = 'regular'
+         ORDER BY effective_from DESC, id DESC`,
+      )
+      .bind(menuItemId)
+      .all<MenuPrice>(),
+    db
+      .prepare(
+        `SELECT pr.*
+         FROM pricing_rules pr
+         JOIN pricing_rule_customers prc ON prc.pricing_rule_id = pr.id
+         WHERE prc.customer_id = ? AND pr.rule_type = 'customer' AND pr.is_active = 1
+         ORDER BY pr.priority DESC, pr.id DESC`,
+      )
+      .bind(customerId)
+      .all<PricingRule>(),
+  ]);
+  if (!customer || !item) {
+    throw new Error("The selected customer or menu item was not found.");
+  }
+  const availability = availabilityResult.results ?? [];
+  const today = new Date().toISOString().slice(0, 10);
+  if (
+    selectedDates.some(
+      (date) => date >= today && !isMenuItemAvailableOn(item, availability, date),
+    )
+  ) {
+    throw new Error("The selected menu item is not available on one or more chosen dates.");
+  }
+
+  const prices = pricesResult.results ?? [];
+  const customerRules = customerRulesResult.results ?? [];
+  const perDatePrices = selectedDates.map((date) =>
+    customerSpecialUnitPrice(
+      item,
+      quantity,
+      effectivePrice(
+        prices,
+        date,
+        { menuItemId: item.id, priceType: "regular" },
+        item.base_price_cents,
+      ),
+      customerRules,
+      date,
+    ),
+  );
+  const expectedCents = perDatePrices.reduce((sum, price) => sum + price * quantity, 0);
+  const firstDate = selectedDates[0];
+  const lastDate = selectedDates[selectedDates.length - 1];
+  const number = orderNumber();
+  const createdAt = `${firstDate} 12:00:00`;
+  const paymentStatus =
+    receivedCents <= 0 ? "unpaid" : receivedCents >= expectedCents ? "verified" : "partial";
+  const isPastOrder = lastDate < today;
+  const orderStatus = isPastOrder ? "completed" : "approved";
+  const facingStatus = isPastOrder ? "Completed" : "Approved";
+  const orderType = selectedDates.length === 1 ? "daily" : selectedDates.length <= 7 ? "weekly" : "monthly";
+  const result = await db
+    .prepare(
+      `INSERT INTO orders
+       (order_number, customer_id, customer_name, customer_phone, customer_email,
+        order_type, fulfillment_method, selected_start_date, selected_end_date,
+        selected_days, pickup_date, pickup_time, status,
+        customer_facing_status, subtotal_cents, total_cents, total_amount,
+        payment_status, customer_notes, admin_notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'pickup', ?, ?, ?, ?, '12:00', ?,
+               ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      number,
+      customer.id,
+      customer.full_name,
+      customer.phone,
+      customer.email,
+      orderType,
+      firstDate,
+      lastDate,
+      selectedDates.join(","),
+      firstDate,
+      orderStatus,
+      facingStatus,
+      expectedCents,
+      expectedCents,
+      expectedCents / 100,
+      paymentStatus,
+      notes,
+      "Manually entered past order",
+      createdAt,
+      createdAt,
+    )
+    .run();
+  const orderId = result.meta.last_row_id;
+  if (!orderId) {
+    throw new Error("Past order could not be created.");
+  }
+
+  await db
+    .prepare(
+      `INSERT INTO order_items
+       (order_id, menu_item_id, item_name_snapshot, item_description_snapshot,
+        quantity, unit_price_cents, unit_price,
+        line_subtotal_cents, line_total_cents, total_price, order_date, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      orderId,
+      item.id,
+      item.name,
+      item.description,
+      quantity,
+      perDatePrices[0],
+      perDatePrices[0] / 100,
+      expectedCents,
+      expectedCents,
+      expectedCents / 100,
+      firstDate,
+      notes,
+    )
+    .run();
+
+  if (receivedCents > 0) {
+    await db
+      .prepare(
+        `INSERT INTO payments
+         (order_id, customer_id, payment_method, payment_status,
+          expected_amount_cents, received_amount_cents, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        orderId,
+        customer.id,
+        paymentMethod,
+        paymentStatus,
+        expectedCents,
+        receivedCents,
+        notes ?? "Recorded with manually entered past order",
+        createdAt,
+        createdAt,
+      )
+      .run();
+  }
+
+  await refreshCustomerRollup(db, customer.id);
+  revalidatePath("/admin");
+  revalidatePath("/admin/orders");
+  revalidatePath("/admin/payments");
+  revalidatePath("/admin/customers");
+  revalidatePath("/admin/prep");
+  const params = new URLSearchParams({ from: firstDate, to: lastDate, saved: "historical" });
+  redirect(`/admin/orders?${params.toString()}`);
+}
+
+export async function updateCustomer(formData: FormData) {
+  await requireAdminSession();
+  const db = await requireDb();
+  const customerId = Number(requiredString(formData, "customer_id"));
+  const name = requiredString(formData, "customer_name");
+  const phone = normalizePhone(requiredString(formData, "customer_phone"));
+  const email = optionalString(formData, "customer_email");
+  const notes = optionalString(formData, "notes");
+  const requestedContact = requiredString(formData, "preferred_contact_method");
+  const requestedStatus = requiredString(formData, "status");
+  const preferredContact = ["whatsapp", "email", "phone"].includes(requestedContact)
+    ? requestedContact
+    : "whatsapp";
+  const status = ["active", "pending_verification", "inactive"].includes(requestedStatus)
+    ? requestedStatus
+    : "active";
+
+  if (!Number.isInteger(customerId) || customerId <= 0 || !phone) {
+    throw new Error("A valid customer and phone number are required.");
+  }
+
+  const duplicate = await db
+    .prepare(
+      `SELECT id FROM customers
+       WHERE id != ? AND (phone = ? OR (? != '' AND lower(email) = lower(?)))
+       LIMIT 1`,
+    )
+    .bind(customerId, phone, email ?? "", email ?? "")
+    .first<{ id: number }>();
+  if (duplicate) {
+    throw new Error("Another customer already uses this phone number or email.");
+  }
+
+  await db
+    .prepare(
+      `UPDATE customers
+       SET full_name = ?, phone = ?, email = ?, preferred_contact_method = ?,
+           status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .bind(name, phone, email, preferredContact, status, notes, customerId)
+    .run();
+
+  revalidatePath("/admin/customers");
+  revalidatePath("/admin/payments");
+  redirect(`/admin/customers?updated=${customerId}`);
+}
+
+export async function deletePayment(formData: FormData) {
+  await requireAdminSession();
+  const db = await requireDb();
+  const paymentId = Number(requiredString(formData, "payment_id"));
+  const payment = await db
+    .prepare("SELECT id, order_id, customer_id FROM payments WHERE id = ?")
+    .bind(paymentId)
+    .first<{ id: number; order_id: number | null; customer_id: number | null }>();
+
+  if (!payment) {
+    throw new Error("Payment record was not found.");
+  }
+
+  await runOptionalMutation(db, "DELETE FROM payment_audit_history WHERE payment_id = ?", [paymentId]);
+  await runOptionalMutation(db, "DELETE FROM payment_matches WHERE payment_id = ?", [paymentId]);
+  await db.prepare("DELETE FROM payments WHERE id = ?").bind(paymentId).run();
+
+  if (payment.order_id) {
+    const latestPayment = await db
+      .prepare(
+        `SELECT payment_status FROM payments
+         WHERE order_id = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .bind(payment.order_id)
+      .first<{ payment_status: string }>();
+    await db
+      .prepare("UPDATE orders SET payment_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .bind(latestPayment?.payment_status ?? "unpaid", payment.order_id)
+      .run();
+  }
+
+  if (payment.customer_id) {
+    await refreshCustomerRollup(db, payment.customer_id);
+  }
+
+  revalidatePath("/admin/payments");
+  revalidatePath("/admin/orders");
+  revalidatePath("/admin/customers");
+  const params = new URLSearchParams({
+    from: optionalString(formData, "from") ?? "",
+    to: optionalString(formData, "to") ?? "",
+    deleted: "1",
+  });
+  redirect(`/admin/payments?${params.toString()}`);
+}
+
+type PaymentEditPayload = {
+  paymentDate: string;
+  paymentMethod: string;
+  paymentStatus: string;
+  receivedAmountCents: number;
+  paymentReference: string | null;
+  notes: string | null;
+};
+
+async function applyPaymentEdit(
+  db: D1DatabaseLike,
+  paymentId: number,
+  payload: PaymentEditPayload,
+) {
+  const payment = await db
+    .prepare("SELECT id, order_id, customer_id, payment_status FROM payments WHERE id = ?")
+    .bind(paymentId)
+    .first<{
+      id: number;
+      order_id: number | null;
+      customer_id: number | null;
+      payment_status: string;
+    }>();
+  if (!payment) {
+    throw new Error("Payment record was not found.");
+  }
+
+  const paymentTimestamp = `${payload.paymentDate} 12:00:00`;
+  await db
+    .prepare(
+      `UPDATE payments
+       SET payment_method = ?, payment_status = ?, received_amount_cents = ?,
+           payment_reference = ?, notes = ?, created_at = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .bind(
+      payload.paymentMethod,
+      payload.paymentStatus,
+      payload.receivedAmountCents,
+      payload.paymentReference,
+      payload.notes,
+      paymentTimestamp,
+      paymentId,
+    )
+    .run();
+
+  await runOptionalMutation(
+    db,
+    `INSERT INTO payment_audit_history
+     (payment_id, old_status, new_status, changed_by_type, changed_by_id, notes)
+     VALUES (?, ?, ?, 'admin', NULL, ?)`,
+    [paymentId, payment.payment_status, payload.paymentStatus, "Payment edited from admin payments page"],
+  );
+
+  if (payment.order_id) {
+    const latestPayment = await db
+      .prepare(
+        `SELECT id, payment_status FROM payments
+         WHERE order_id = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .bind(payment.order_id)
+      .first<{ id: number; payment_status: string }>();
+    if (latestPayment) {
+      await db
+        .prepare("UPDATE orders SET payment_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(latestPayment.payment_status, payment.order_id)
+        .run();
+    }
+  }
+  if (payment.customer_id) {
+    await refreshCustomerRollup(db, payment.customer_id);
+  }
+  return payment;
+}
+
+function paymentRedirectParams(formData: FormData, paymentDate: string, marker: string) {
+  const currentFrom = optionalString(formData, "from") ?? paymentDate;
+  const currentTo = optionalString(formData, "to") ?? paymentDate;
+  return new URLSearchParams({
+    from: paymentDate < currentFrom ? paymentDate : currentFrom,
+    to: paymentDate > currentTo ? paymentDate : currentTo,
+    q: optionalString(formData, "q") ?? "",
+    [marker]: "1",
+  });
+}
+
+export async function updatePaymentRecord(formData: FormData) {
+  const admin = await requireAdminSession();
+  const db = await requireDb();
+  const paymentId = Number(requiredString(formData, "payment_id"));
+  const paymentDate = requiredString(formData, "payment_date");
+  const requestedMethod = requiredString(formData, "payment_method");
+  const requestedStatus = requiredString(formData, "payment_status");
+  const receivedAmountCents = Math.round(Number(formData.get("received_amount") ?? 0) * 100);
+  const validMethods = ["interac", "cash", "other", "manual"];
+  const validStatuses = ["pending_verification", "partial", "paid", "verified", "refunded"];
+
+  if (!Number.isInteger(paymentId) || paymentId <= 0 ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+    throw new Error("A valid payment and payment date are required.");
+  }
+  if (!Number.isFinite(receivedAmountCents) || receivedAmountCents < 0) {
+    throw new Error("A valid received amount is required.");
+  }
+  if (!validMethods.includes(requestedMethod) || !validStatuses.includes(requestedStatus)) {
+    throw new Error("Invalid payment method or status.");
+  }
+
+  const payment = await db
+    .prepare("SELECT id FROM payments WHERE id = ?")
+    .bind(paymentId)
+    .first<{ id: number }>();
+  if (!payment) {
+    throw new Error("Payment record was not found.");
+  }
+
+  const payload: PaymentEditPayload = {
+    paymentDate,
+    paymentMethod: requestedMethod,
+    paymentStatus: requestedStatus,
+    receivedAmountCents,
+    paymentReference: optionalString(formData, "payment_reference"),
+    notes: optionalString(formData, "notes"),
+  };
+  const settingsRows = await db.prepare("SELECT key, value FROM app_settings WHERE key = 'payment_edit_second_admin_approval_enabled'").all<{
+    key: string;
+    value: string;
+  }>();
+  const requiresApproval = settingBool(
+    Object.fromEntries((settingsRows.results ?? []).map((row) => [row.key, row.value])),
+    "payment_edit_second_admin_approval_enabled",
+    false,
+  );
+
+  if (requiresApproval) {
+    await db
+      .prepare(
+        `INSERT INTO payment_edit_approvals
+         (payment_id, requested_by_admin_id, requested_payload, status)
+         VALUES (?, ?, ?, 'pending')`,
+      )
+      .bind(paymentId, admin.id, JSON.stringify(payload))
+      .run();
+    revalidatePath("/admin/payments");
+    redirect(`/admin/payments?${paymentRedirectParams(formData, paymentDate, "approval_requested").toString()}`);
+  }
+
+  await applyPaymentEdit(db, paymentId, payload);
+  revalidatePath("/admin");
+  revalidatePath("/admin/payments");
+  revalidatePath("/admin/orders");
+  revalidatePath("/admin/customers");
+  const params = paymentRedirectParams(formData, paymentDate, "updated");
+  redirect(`/admin/payments?${params.toString()}`);
+}
+
+export async function approvePaymentEdit(formData: FormData) {
+  const admin = await requireAdminSession();
+  const db = await requireDb();
+  const approvalId = Number(requiredString(formData, "approval_id"));
+  const approval = await db
+    .prepare(
+      `SELECT id, payment_id, requested_by_admin_id, requested_payload
+       FROM payment_edit_approvals
+       WHERE id = ? AND status = 'pending'`,
+    )
+    .bind(approvalId)
+    .first<{
+      id: number;
+      payment_id: number;
+      requested_by_admin_id: number;
+      requested_payload: string;
+    }>();
+  if (!approval) {
+    throw new Error("Payment approval request was not found.");
+  }
+  if (approval.requested_by_admin_id === admin.id) {
+    throw new Error("Payment edits must be approved by a different admin.");
+  }
+  const payload = JSON.parse(approval.requested_payload) as PaymentEditPayload;
+  await applyPaymentEdit(db, approval.payment_id, payload);
+  await db
+    .prepare(
+      `UPDATE payment_edit_approvals
+       SET status = 'approved',
+           approved_by_admin_id = ?,
+           reviewed_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .bind(admin.id, approvalId)
+    .run();
+  revalidatePath("/admin/payments");
+  revalidatePath("/admin/orders");
+  revalidatePath("/admin/customers");
+  redirect(`/admin/payments?${paymentRedirectParams(formData, payload.paymentDate, "approved").toString()}`);
+}
+
+export async function rejectPaymentEdit(formData: FormData) {
+  const admin = await requireAdminSession();
+  const db = await requireDb();
+  const approvalId = Number(requiredString(formData, "approval_id"));
+  await db
+    .prepare(
+      `UPDATE payment_edit_approvals
+       SET status = 'rejected',
+           approved_by_admin_id = ?,
+           review_notes = ?,
+           reviewed_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'pending'`,
+    )
+    .bind(admin.id, optionalString(formData, "review_notes"), approvalId)
+    .run();
+  revalidatePath("/admin/payments");
+  redirect(`/admin/payments?${paymentRedirectParams(formData, new Date().toISOString().slice(0, 10), "rejected").toString()}`);
 }
 
 export async function recordPayment(formData: FormData) {
@@ -2639,6 +3622,12 @@ export async function recordPayment(formData: FormData) {
   const status = requiredString(formData, "payment_status");
   const amountCents = Math.round(Number(formData.get("received_amount") ?? 0) * 100);
   const paymentDate = optionalString(formData, "payment_date") ?? new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+    throw new Error("A valid payment date is required.");
+  }
+  if (!Number.isFinite(amountCents) || amountCents < 0) {
+    throw new Error("A valid received amount is required.");
+  }
   const paymentCreatedAt = `${paymentDate} 12:00:00`;
   const order = orderId
     ? await db
@@ -2656,10 +3645,37 @@ export async function recordPayment(formData: FormData) {
           total_cents: number;
         }>()
     : null;
-  const customerName = order?.customer_name ?? requiredString(formData, "customer_name");
-  const customerEmail = order?.customer_email ?? optionalString(formData, "customer_email");
-  const customerPhone = order?.customer_phone ?? requiredString(formData, "customer_phone");
-  const customerId = order?.customer_id ?? (await upsertCustomerForOrder(db, customerName, customerEmail, customerPhone));
+  const selectedCustomerId = Number(optionalString(formData, "customer_id") ?? 0) || null;
+  const enteredEmail = optionalString(formData, "customer_email");
+  const enteredPhone = normalizePhone(optionalString(formData, "customer_phone") ?? "");
+  const matchedCustomer = !order && !selectedCustomerId && (enteredEmail || enteredPhone)
+    ? await db
+        .prepare(
+          `SELECT id, full_name, email, phone
+           FROM customers
+           WHERE (? != '' AND lower(email) = lower(?)) OR (? != '' AND phone = ?)
+           LIMIT 1`,
+        )
+        .bind(enteredEmail ?? "", enteredEmail ?? "", enteredPhone, enteredPhone)
+        .first<{ id: number; full_name: string; email: string | null; phone: string }>()
+    : null;
+  const selectedCustomer = selectedCustomerId
+    ? await db
+        .prepare("SELECT id, full_name, email, phone FROM customers WHERE id = ?")
+        .bind(selectedCustomerId)
+        .first<{ id: number; full_name: string; email: string | null; phone: string }>()
+    : null;
+  const knownCustomer = selectedCustomer ?? matchedCustomer;
+  const customerName = order?.customer_name ?? knownCustomer?.full_name ?? requiredString(formData, "customer_name");
+  const customerEmail = order?.customer_email ?? knownCustomer?.email ?? enteredEmail;
+  const customerPhone = order?.customer_phone ?? knownCustomer?.phone ?? enteredPhone;
+  if (!customerPhone) {
+    throw new Error("Customer phone is required when the customer cannot be matched by email.");
+  }
+  const customerId =
+    order?.customer_id ??
+    knownCustomer?.id ??
+    (await upsertCustomerForOrder(db, customerName, customerEmail, customerPhone));
   if (orderId && !order?.customer_id) {
     await db
       .prepare("UPDATE orders SET customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
@@ -2696,6 +3712,12 @@ export async function recordPayment(formData: FormData) {
   revalidatePath("/admin/payments");
   revalidatePath("/admin/orders");
   revalidatePath("/admin/customers");
+  const params = new URLSearchParams({
+    from: paymentDate,
+    to: paymentDate,
+    saved: "recorded",
+  });
+  redirect(`/admin/payments?${params.toString()}`);
 }
 
 export async function requestPickupDateChange(formData: FormData) {
@@ -2748,6 +3770,7 @@ export async function requestPickupDateChange(formData: FormData) {
 
 export async function updatePricingRule(formData: FormData) {
   await requireAdminSession();
+  await ensureKitchenSchema();
   const db = await requireDb();
   const ruleId = Number(requiredString(formData, "id"));
   const pricingMethod = requiredString(formData, "pricing_method");
@@ -2760,19 +3783,22 @@ export async function updatePricingRule(formData: FormData) {
       ? Number(formData.get("discount_percent") ?? 0)
       : null;
   const isActive = formData.get("is_active") === "on" ? 1 : 0;
+  const ruleScope = optionalString(formData, "rule_scope") === "customer" ? "customer" : "bulk";
   
   await db
     .prepare(
       `UPDATE pricing_rules
-       SET name = ?, description = ?, rule_type = 'bulk', pricing_method = ?,
+       SET name = ?, description = ?, rule_type = ?, pricing_method = ?,
            applies_to = ?, menu_item_id = ?, category_id = ?, minimum_quantity = ?,
            discount_percent = ?, fixed_unit_price_cents = ?, start_date = ?,
-           end_date = ?, requires_admin_approval = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+           end_date = ?, is_bulk_order = ?, requires_admin_approval = ?,
+           is_active = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
     )
     .bind(
       requiredString(formData, "name"),
       optionalString(formData, "description"),
+      ruleScope,
       pricingMethod,
       requiredString(formData, "applies_to"),
       Number(formData.get("menu_item_id") || 0) || null,
@@ -2782,22 +3808,43 @@ export async function updatePricingRule(formData: FormData) {
       fixedUnit,
       optionalString(formData, "start_date"),
       optionalString(formData, "end_date"),
+      ruleScope === "bulk" ? 1 : 0,
       formData.get("requires_admin_approval") === "on" ? 1 : 0,
       isActive,
       ruleId,
     )
     .run();
+  await db
+    .prepare("DELETE FROM pricing_rule_customers WHERE pricing_rule_id = ?")
+    .bind(ruleId)
+    .run();
+  if (ruleScope === "customer") {
+    for (const customerId of formData.getAll("customer_ids").map(Number).filter(Number.isInteger)) {
+      await db
+        .prepare(
+          "INSERT OR IGNORE INTO pricing_rule_customers (pricing_rule_id, customer_id) VALUES (?, ?)",
+        )
+        .bind(ruleId, customerId)
+        .run();
+    }
+  }
 
   revalidatePath("/admin/pricing");
+  revalidatePath("/admin/orders");
   revalidatePath("/order");
 }
 
 export async function deletePricingRule(formData: FormData) {
   await requireAdminSession();
+  await ensureKitchenSchema();
   const db = await requireDb();
   const ruleId = Number(requiredString(formData, "id"));
 
   await runOptionalMutation(db, "UPDATE order_pricing_adjustments SET pricing_rule_id = NULL WHERE pricing_rule_id = ?", [ruleId]);
+  await db
+    .prepare("DELETE FROM pricing_rule_customers WHERE pricing_rule_id = ?")
+    .bind(ruleId)
+    .run();
 
   await db
     .prepare("DELETE FROM pricing_rules WHERE id = ?")
@@ -2805,6 +3852,7 @@ export async function deletePricingRule(formData: FormData) {
     .run();
 
   revalidatePath("/admin/pricing");
+  revalidatePath("/admin/orders");
   revalidatePath("/order");
 }
 

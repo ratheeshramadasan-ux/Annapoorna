@@ -38,6 +38,9 @@ type EnvWithDb = {
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
   WHATSAPP_API_VERSION?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  GOOGLE_REFRESH_TOKEN?: string;
 };
 
 type LocalWranglerD1Database = D1DatabaseLike & {
@@ -81,7 +84,17 @@ function processEnvFallback(): EnvWithDb {
     WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN,
     WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID,
     WHATSAPP_API_VERSION: process.env.WHATSAPP_API_VERSION,
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+    GOOGLE_REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN,
   };
+}
+
+function shouldRunRuntimeSchema(db: D1DatabaseLike) {
+  return (
+    Boolean((db as Partial<LocalWranglerD1Database>).__localWrangler) ||
+    process.env.ANNAPOORNA_ENABLE_RUNTIME_SCHEMA === "true"
+  );
 }
 
 async function loadRuntimeEnv(forceCloudflare = false): Promise<EnvWithDb> {
@@ -217,6 +230,9 @@ async function ensureKitchenSchemaOnce() {
   if (!db) {
     return;
   }
+  if (!shouldRunRuntimeSchema(db)) {
+    return;
+  }
 
   const alterStatements = [
     "ALTER TABLE admin_users ADD COLUMN whatsapp_number TEXT",
@@ -230,6 +246,7 @@ async function ensureKitchenSchemaOnce() {
     "ALTER TABLE menu_items ADD COLUMN bulk_notice_hours INTEGER NOT NULL DEFAULT 24",
     "ALTER TABLE menu_items ADD COLUMN menu_start_date TEXT",
     "ALTER TABLE menu_items ADD COLUMN menu_end_date TEXT",
+    "ALTER TABLE menu_items ADD COLUMN icon_text TEXT",
     "ALTER TABLE menu_item_availability ADD COLUMN specific_date TEXT",
     "ALTER TABLE menu_item_availability ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     "ALTER TABLE orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'daily'",
@@ -252,6 +269,13 @@ async function ensureKitchenSchemaOnce() {
     "ALTER TABLE order_items ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     "ALTER TABLE reviews ADD COLUMN order_id INTEGER",
     "ALTER TABLE reviews ADD COLUMN reviewer_contact TEXT",
+    "ALTER TABLE reviews ADD COLUMN source TEXT NOT NULL DEFAULT 'portal'",
+    "ALTER TABLE reviews ADD COLUMN external_review_id TEXT",
+    "ALTER TABLE reviews ADD COLUMN external_review_url TEXT",
+    "ALTER TABLE reviews ADD COLUMN reviewer_avatar_url TEXT",
+    "ALTER TABLE reviews ADD COLUMN google_create_time TEXT",
+    "ALTER TABLE reviews ADD COLUMN google_update_time TEXT",
+    "ALTER TABLE reviews ADD COLUMN google_reply TEXT",
   ];
 
   const createStatements = [
@@ -338,6 +362,23 @@ async function ensureKitchenSchemaOnce() {
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS pricing_rule_customers (
+      pricing_rule_id INTEGER NOT NULL,
+      customer_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (pricing_rule_id, customer_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS payment_edit_approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_id INTEGER NOT NULL,
+      requested_by_admin_id INTEGER NOT NULL,
+      approved_by_admin_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_payload TEXT NOT NULL,
+      review_notes TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at TEXT
     )`,
   ];
 
@@ -448,6 +489,18 @@ async function ensureKitchenSchemaOnce() {
     ["delivery_service_area_note", "", "string"],
     ["public_allow_reviews", "true", "boolean"],
     ["google_review_url", "", "string"],
+    ["google_reviews_sync_enabled", "false", "boolean"],
+    ["google_account_id", "", "string"],
+    ["google_location_id", "", "string"],
+    ["google_reviews_last_sync_at", "", "string"],
+    ["google_reviews_last_sync_status", "", "string"],
+    ["brand_font_family", "aptos", "string"],
+    ["brand_display_font", "cambria", "string"],
+    ["brand_font_scale", "100", "number"],
+    ["brand_background_theme", "cream_gold", "string"],
+    ["brand_background_image_url", "", "string"],
+    ["brand_icon_url", "/assets/brand-mark.jpg", "string"],
+    ["payment_edit_second_admin_approval_enabled", "false", "boolean"],
     ["home_menu_lines", defaultHomeContent.menu.join("\\n"), "text"],
     ["home_pickup_lines", defaultHomeContent.pickup.join("\\n"), "text"],
     ["home_perfect_for_lines", defaultHomeContent.perfectFor.join("\\n"), "text"],
@@ -566,14 +619,17 @@ function safeMenuImageUrl(value: string | null | undefined) {
   if (!value) {
     return null;
   }
-  if (value.startsWith("data:image") || value.length > 500) {
-    return "/assets/veg-thali.png";
-  }
   return value;
 }
 
 export async function getHomeContent() {
-  const settings = await getSettings();
+  let settings: Record<string, string> = {};
+  try {
+    settings = await getSettings();
+  } catch (error) {
+    console.error("Unable to load homepage settings; using defaults.", error);
+  }
+
   return {
     menu: settingLines(settings, "home_menu_lines", defaultHomeContent.menu),
     pickup: settingLines(settings, "home_pickup_lines", defaultHomeContent.pickup),
@@ -625,11 +681,7 @@ export async function getPublicMenu() {
            mi.description,
            mi.food_type,
            mi.base_price_cents,
-           CASE
-             WHEN mi.image_url LIKE 'data:image%' OR length(mi.image_url) > 500
-             THEN '/assets/veg-thali.png'
-             ELSE mi.image_url
-           END AS image_url,
+           mi.image_url,
            mi.is_active,
            mi.is_public,
            mi.public_sold_out,
@@ -721,11 +773,7 @@ export async function getAdminMenuData() {
            mi.description,
            mi.food_type,
            mi.base_price_cents,
-           CASE
-             WHEN mi.image_url LIKE 'data:image%' OR length(mi.image_url) > 500
-             THEN '/assets/veg-thali.png'
-             ELSE mi.image_url
-           END AS image_url,
+           mi.image_url,
            mi.is_active,
            mi.is_public,
            mi.public_sold_out,
@@ -828,10 +876,12 @@ export async function getOrderForLookup(
 
 export async function getApprovedReviews() {
   return all<Review>(
-    `SELECT id, customer_name, rating, comment, moderation_status, created_at
+    `SELECT id, customer_name, rating, comment, moderation_status, created_at,
+            source, external_review_url, google_update_time
      FROM reviews
      WHERE moderation_status = 'approved'
-     ORDER BY created_at DESC`,
+     ORDER BY COALESCE(google_update_time, created_at) DESC
+     LIMIT 100`,
   );
 }
 
@@ -934,7 +984,7 @@ export async function syncCustomerDirectoryFromOrders() {
            SELECT COALESCE(SUM(received_amount_cents), 0)
            FROM payments
            WHERE payments.customer_id = customers.id
-             AND payments.payment_status IN ('paid', 'verified')
+             AND payments.payment_status IN ('partial', 'paid', 'verified')
          ),
          last_order_at = (
            SELECT MAX(created_at)

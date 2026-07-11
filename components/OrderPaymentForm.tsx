@@ -23,7 +23,8 @@ export default function OrderPaymentForm({
   to,
 }: OrderPaymentFormProps) {
   const [status, setStatus] = useState(paymentStatus);
-  const showMethod = status === "paid" || status === "verified" || status === "refunded";
+  const showMethod =
+    status === "partial" || status === "paid" || status === "verified" || status === "refunded";
   const defaultAmount = ((amountReceivedCents ?? totalCents) / 100).toFixed(2);
 
   return (
@@ -38,6 +39,7 @@ export default function OrderPaymentForm({
       >
         <option value="unpaid">Unpaid</option>
         <option value="pending_verification">Pending verification</option>
+        <option value="partial">Partially paid</option>
         <option value="paid">Paid</option>
         <option value="verified">Verified</option>
         <option value="refunded">Refunded</option>

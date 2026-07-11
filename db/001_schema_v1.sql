@@ -32,6 +32,7 @@ DROP TABLE IF EXISTS pickup_slot_overrides;
 DROP TABLE IF EXISTS pickup_slots;
 DROP TABLE IF EXISTS holidays;
 DROP TABLE IF EXISTS order_pricing_adjustments;
+DROP TABLE IF EXISTS pricing_rule_customers;
 DROP TABLE IF EXISTS pricing_rules;
 DROP TABLE IF EXISTS menu_item_daily_capacity;
 DROP TABLE IF EXISTS menu_item_ingredients;
@@ -162,6 +163,7 @@ CREATE TABLE menu_items (
   food_type TEXT NOT NULL DEFAULT 'veg',
   base_price_cents INTEGER NOT NULL DEFAULT 0,
   image_url TEXT,
+  icon_text TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
   is_public INTEGER NOT NULL DEFAULT 1,
   is_plan INTEGER NOT NULL DEFAULT 0,
@@ -371,6 +373,15 @@ CREATE TABLE pickup_slot_overrides (
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (pickup_slot_id) REFERENCES pickup_slots(id)
+);
+
+CREATE TABLE pricing_rule_customers (
+  pricing_rule_id INTEGER NOT NULL,
+  customer_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (pricing_rule_id, customer_id),
+  FOREIGN KEY (pricing_rule_id) REFERENCES pricing_rules(id),
+  FOREIGN KEY (customer_id) REFERENCES customers(id)
 );
 
 CREATE TABLE holidays (
@@ -616,6 +627,21 @@ CREATE TABLE payment_audit_history (
   FOREIGN KEY (payment_id) REFERENCES payments(id)
 );
 
+CREATE TABLE payment_edit_approvals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  payment_id INTEGER NOT NULL,
+  requested_by_admin_id INTEGER NOT NULL,
+  approved_by_admin_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_payload TEXT NOT NULL,
+  review_notes TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at TEXT,
+  FOREIGN KEY (payment_id) REFERENCES payments(id),
+  FOREIGN KEY (requested_by_admin_id) REFERENCES admin_users(id),
+  FOREIGN KEY (approved_by_admin_id) REFERENCES admin_users(id)
+);
+
 CREATE TABLE inventory_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -681,6 +707,13 @@ CREATE TABLE reviews (
   customer_name TEXT NOT NULL,
   rating INTEGER NOT NULL,
   comment TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'portal',
+  external_review_id TEXT,
+  external_review_url TEXT,
+  reviewer_avatar_url TEXT,
+  google_create_time TEXT,
+  google_update_time TEXT,
+  google_reply TEXT,
   is_verified_customer INTEGER NOT NULL DEFAULT 0,
   moderation_status TEXT NOT NULL DEFAULT 'pending',
   approved_by_admin_id INTEGER,
@@ -909,6 +942,17 @@ Families and guests', 'text', 'home', 'Home page perfect-for card lines', 1),
 ('public_show_admin_link', 'false', 'boolean', 'public', 'Show admin link publicly', 0),
 ('public_allow_reviews', 'true', 'boolean', 'public', 'Allow review submission', 1),
 ('google_review_url', '', 'string', 'reviews', 'Google review link', 1),
+('google_reviews_sync_enabled', 'false', 'boolean', 'reviews', 'Enable Google Business Profile review sync', 0),
+('google_account_id', '', 'string', 'reviews', 'Google Business Profile account ID', 0),
+('google_location_id', '', 'string', 'reviews', 'Google Business Profile location ID', 0),
+('google_reviews_last_sync_at', '', 'string', 'reviews', 'Last Google review sync time', 0),
+('google_reviews_last_sync_status', '', 'string', 'reviews', 'Last Google review sync status', 0),
+('brand_font_family', 'aptos', 'string', 'branding', 'Primary website font family', 1),
+('brand_display_font', 'cambria', 'string', 'branding', 'Display heading font family', 1),
+('brand_font_scale', '100', 'number', 'branding', 'Global font scale percentage', 1),
+('brand_background_theme', 'cream_gold', 'string', 'branding', 'Website background theme', 1),
+('brand_background_image_url', '', 'string', 'branding', 'Optional background image URL', 1),
+('brand_icon_url', '/assets/brand-mark.jpg', 'string', 'branding', 'Brand icon image URL', 1),
 ('public_allow_preorder', 'true', 'boolean', 'public', 'Allow preorder', 1),
 
 ('public_allow_customer_registration', 'true', 'boolean', 'customer', 'Allow customer registration', 1),
@@ -927,6 +971,7 @@ Families and guests', 'text', 'home', 'Home page perfect-for card lines', 1),
 ('bulk_order_enabled', 'true', 'boolean', 'pricing', 'Enable bulk orders', 1),
 ('bulk_order_auto_apply', 'true', 'boolean', 'pricing', 'Auto apply bulk pricing', 0),
 ('bulk_order_requires_admin_approval_quantity', '20', 'number', 'pricing', 'Bulk quantity requiring admin approval', 0),
+('payment_edit_second_admin_approval_enabled', 'false', 'boolean', 'payments', 'Require a second admin to approve payment edits', 0),
 
 ('customer_chat_enabled', 'true', 'boolean', 'chat', 'Enable customer chat', 1),
 ('customer_order_comments_enabled', 'true', 'boolean', 'chat', 'Allow customer order comments', 1),

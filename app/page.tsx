@@ -3,12 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { PublicNav } from "@/components/PublicShell";
-import { getHomeContent } from "@/lib/db";
+import { getHomeContent, getSettings } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const homeContent = await getHomeContent();
+  const [homeContent, settings] = await Promise.all([getHomeContent(), getSettings().catch(() => ({} as Record<string, string>))]);
+  const brandIcon = settings.brand_icon_url || "/assets/brand-mark.jpg";
 
   return (
     <main className="home-shell">
@@ -20,10 +21,11 @@ export default async function HomePage() {
 
         <div className="banner-logo">
           <Image
-            src="/assets/brand-mark.jpg"
+            src={brandIcon}
             alt="Annapoorna logo"
             width={120}
             height={120}
+            unoptimized
             priority
           />
         </div>
@@ -70,32 +72,32 @@ export default async function HomePage() {
       </section>
 
       <section className="info-cards">
-        <article className="info-card">
-          <h3>Menu</h3>
+        <details className="info-card collapsible-card" open>
+          <summary>Menu</summary>
           <ul>
             {homeContent.menu.map((line) => (
               <li key={line}>{line}</li>
             ))}
           </ul>
-        </article>
+        </details>
 
-        <article className="info-card">
-          <h3>Pickup Details</h3>
+        <details className="info-card collapsible-card" open>
+          <summary>Pickup Details</summary>
           {homeContent.pickup.map((line, index) => (
             <p key={line}>
               {index === 0 ? <strong>{line}</strong> : line}
             </p>
           ))}
-        </article>
+        </details>
 
-        <article className="info-card">
-          <h3>Perfect For</h3>
+        <details className="info-card collapsible-card" open>
+          <summary>Perfect For</summary>
           <ul>
             {homeContent.perfectFor.map((line) => (
               <li key={line}>{line}</li>
             ))}
           </ul>
-        </article>
+        </details>
       </section>
 
       <section className="tag-strip">

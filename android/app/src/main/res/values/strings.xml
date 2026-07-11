@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Annapoorna</string>
+    <string name="title_activity_main">Annapoorna</string>
+    <string name="package_name">com.annapoorna.app</string>
+    <string name="custom_url_scheme">com.annapoorna.app</string>
+</resources>

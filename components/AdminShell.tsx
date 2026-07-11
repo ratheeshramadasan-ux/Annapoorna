@@ -1,6 +1,6 @@
 import Link from "next/link";
-import Image from "next/image";
 import { logoutAdmin } from "@/app/actions";
+import { getSettings } from "@/lib/db";
 
 const adminLinks = [
   { href: "/admin", label: "Dashboard" },
@@ -17,24 +17,21 @@ const adminLinks = [
   { href: "/admin/settings", label: "Settings" },
 ];
 
-export default function AdminShell({
+export default async function AdminShell({
   title,
   children,
 }: {
   title: string;
   children: React.ReactNode;
 }) {
+  const settings = await getSettings().catch(() => ({} as Record<string, string>));
+  const brandIcon = settings.brand_icon_url || "/assets/brand-mark.jpg";
   return (
     <main className="admin-shell">
       <aside className="admin-sidebar">
         <div className="admin-brand">
-          <Image
-            src="/assets/brand-mark.jpg"
-            alt="Annapoorna logo"
-            width={72}
-            height={72}
-            priority
-          />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={brandIcon} alt="Annapoorna logo" />
           <div>
             <h1>Annapoorna</h1>
             <span>Admin</span>
@@ -57,13 +54,8 @@ export default function AdminShell({
             <p>Hidden owner workspace</p>
             <h2>{title}</h2>
           </div>
-          <Image
-            src="/assets/brand-mark.jpg"
-            alt="Annapoorna logo"
-            width={92}
-            height={92}
-            priority
-          />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={brandIcon} alt="Annapoorna logo" />
         </header>
         {children}
       </section>

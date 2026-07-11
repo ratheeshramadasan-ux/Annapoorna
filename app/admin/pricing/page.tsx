@@ -13,7 +13,7 @@ import DeleteConfirmButton from "@/components/DeleteConfirmButton";
 import { requireAdminSession } from "@/lib/auth";
 import { resolveDateRange, todayLocal, type DateRangeSearchParams } from "@/lib/date-range";
 import { all, ensureKitchenSchema, formatMoney, first } from "@/lib/db";
-import type { MenuCategory, MenuItem, PricingRule, ThaliPlan } from "@/lib/types";
+import type { Customer, MenuCategory, MenuItem, PricingRule, ThaliPlan } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +30,7 @@ export default async function AdminPricingPage({
   const editRuleId = resolvedParams.editRuleId ? Number(resolvedParams.editRuleId) : null;
   const editThaliId = resolvedParams.editThaliId ? Number(resolvedParams.editThaliId) : null;
 
-  const [rows, items, categories, editRule, editThali] = await Promise.all([
+  const [rows, items, categories, customers, assignments, editRule, editThali] = await Promise.all([
     all<PricingRule>(
       `SELECT *
        FROM pricing_rules
@@ -41,6 +41,10 @@ export default async function AdminPricingPage({
     ),
     all<MenuItem>("SELECT * FROM menu_items ORDER BY name"),
     all<MenuCategory>("SELECT * FROM menu_categories ORDER BY sort_order, name"),
+    all<Customer>("SELECT * FROM customers WHERE status != 'inactive' ORDER BY full_name"),
+    all<{ pricing_rule_id: number; customer_id: number }>(
+      "SELECT pricing_rule_id, customer_id FROM pricing_rule_customers",
+    ),
     editRuleId
       ? first<PricingRule>("SELECT * FROM pricing_rules WHERE id = ?", [editRuleId])
       : null,
@@ -75,12 +79,37 @@ export default async function AdminPricingPage({
             <input name="name" defaultValue={editRule.name} required />
           </label>
           <label>
+            Rule type
+            <select name="rule_scope" defaultValue={editRule.rule_type === "customer" ? "customer" : "bulk"}>
+              <option value="bulk">Bulk/general pricing</option>
+              <option value="customer">Specific customers</option>
+            </select>
+          </label>
+          <label>
             Applies to
             <select name="applies_to" defaultValue={editRule.applies_to}>
               <option value="all_items">All items</option>
               <option value="specific_item">Specific item</option>
               <option value="category">Category</option>
             </select>
+          </label>
+          <label className="wide-field" style={{ gridColumn: "span 2" }}>
+            Special-price customers
+            <select
+              name="customer_ids"
+              multiple
+              size={Math.min(8, Math.max(3, customers.length))}
+              defaultValue={assignments
+                .filter((entry) => entry.pricing_rule_id === editRule.id)
+                .map((entry) => String(entry.customer_id))}
+            >
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.full_name} - {customer.phone}
+                </option>
+              ))}
+            </select>
+            <small>Use Ctrl/Command to add or remove multiple customers.</small>
           </label>
           <label>
             Item
@@ -106,7 +135,7 @@ export default async function AdminPricingPage({
           </label>
           <label>
             Minimum quantity
-            <input name="minimum_quantity" type="number" min="2" defaultValue={editRule.minimum_quantity ?? 5} />
+            <input name="minimum_quantity" type="number" min="1" defaultValue={editRule.minimum_quantity ?? 1} />
           </label>
           <label>
             Method
@@ -155,12 +184,30 @@ export default async function AdminPricingPage({
             <input name="name" required />
           </label>
           <label>
+            Rule type
+            <select name="rule_scope" defaultValue="customer">
+              <option value="customer">Specific customers</option>
+              <option value="bulk">Bulk/general pricing</option>
+            </select>
+          </label>
+          <label>
             Applies to
             <select name="applies_to" defaultValue="all_items">
               <option value="all_items">All items</option>
               <option value="specific_item">Specific item</option>
               <option value="category">Category</option>
             </select>
+          </label>
+          <label className="wide-field" style={{ gridColumn: "span 2" }}>
+            Special-price customers
+            <select name="customer_ids" multiple size={Math.min(8, Math.max(3, customers.length))}>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.full_name} - {customer.phone}
+                </option>
+              ))}
+            </select>
+            <small>Use Ctrl/Command to select multiple customers.</small>
           </label>
           <label>
             Item
@@ -186,7 +233,7 @@ export default async function AdminPricingPage({
           </label>
           <label>
             Minimum quantity
-            <input name="minimum_quantity" type="number" min="2" defaultValue="5" />
+            <input name="minimum_quantity" type="number" min="1" defaultValue="1" />
           </label>
           <label>
             Method
@@ -224,10 +271,15 @@ export default async function AdminPricingPage({
       )}
 
       <DataTable
-        headers={["Rule", "Type", "Minimum", "Value", "Approval", "Active", "Actions"]}
+        headers={["Rule", "Type", "Customers", "Minimum", "Value", "Approval", "Active", "Actions"]}
         rows={rows.map((rule) => [
           rule.name,
-          rule.pricing_method,
+          rule.rule_type === "customer" ? "Customer special" : rule.pricing_method,
+          assignments
+            .filter((entry) => entry.pricing_rule_id === rule.id)
+            .map((entry) => customers.find((customer) => customer.id === entry.customer_id)?.full_name)
+            .filter(Boolean)
+            .join(", ") || "—",
           rule.minimum_quantity,
           rule.fixed_unit_price_cents
             ? formatMoney(rule.fixed_unit_price_cents)

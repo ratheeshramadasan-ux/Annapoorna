@@ -16,9 +16,6 @@ function safeMenuImageUrl(value?: string | null) {
   if (!value) {
     return "/assets/veg-thali.png";
   }
-  if (value.startsWith("data:image") || value.length > 500) {
-    return "/assets/veg-thali.png";
-  }
   return value;
 }
 

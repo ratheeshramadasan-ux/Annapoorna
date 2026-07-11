@@ -91,9 +91,6 @@ function safeMenuImageUrl(value?: string | null) {
   if (!value) {
     return null;
   }
-  if (value.startsWith("data:image") || value.length > 500) {
-    return "/assets/veg-thali.png";
-  }
   return value;
 }
 
@@ -245,6 +242,10 @@ export default function AdminMenuManager({
             Item name
             <input name="name" required />
           </label>
+          <label>
+            Item icon
+            <input name="icon_text" maxLength={4} placeholder="🍛" />
+          </label>
           <div className="form-field wide-field">
             <span>Description</span>
             <RichTextField name="description" />
@@ -295,7 +296,10 @@ export default function AdminMenuManager({
                       )}
                     </span>
                     <span className="admin-menu-card-body">
-                      <strong>{item.name}</strong>
+                      <strong>
+                        {item.icon_text ? <span className="menu-item-icon-badge">{item.icon_text}</span> : null}
+                        {item.name}
+                      </strong>
                       <small>{item.category_name ?? "Uncategorized"}</small>
                       {item.description ? (
                         <small className="admin-menu-description-preview">
@@ -342,6 +346,10 @@ export default function AdminMenuManager({
               <label>
                 Item name
                 <input name="name" defaultValue={selectedItem.name} required />
+              </label>
+              <label>
+                Item icon
+                <input name="icon_text" maxLength={4} defaultValue={selectedItem.icon_text ?? ""} placeholder="🍛" />
               </label>
               <div className="form-field wide-field">
                 <span>Description</span>

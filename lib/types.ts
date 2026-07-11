@@ -41,6 +41,7 @@ export type MenuItem = {
   food_type: string;
   base_price_cents: number;
   image_url: string | null;
+  icon_text: string | null;
   is_active: number;
   is_public: number;
   public_sold_out: number;
@@ -133,6 +134,11 @@ export type PricingRule = {
   is_active: number;
   start_date: string | null;
   end_date: string | null;
+  priority?: number;
+};
+
+export type CustomerPricingRule = PricingRule & {
+  customer_id: number;
 };
 
 export type PickupSlot = {
@@ -212,6 +218,13 @@ export type Review = {
   customer_name: string;
   rating: number;
   comment: string;
+  source?: string | null;
+  external_review_id?: string | null;
+  external_review_url?: string | null;
+  reviewer_avatar_url?: string | null;
+  google_create_time?: string | null;
+  google_update_time?: string | null;
+  google_reply?: string | null;
   moderation_status: string;
   created_at: string;
 };
@@ -222,6 +235,8 @@ export type Customer = {
   email: string | null;
   phone: string;
   status: string;
+  preferred_contact_method: string;
+  notes: string | null;
   order_count: number;
   total_spent_cents: number;
   last_order_at: string | null;

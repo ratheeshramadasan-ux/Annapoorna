@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 
+const MAX_IMAGE_DIMENSION = 1200;
+const TARGET_IMAGE_BYTES = 150 * 1024;
+const MAX_SOURCE_BYTES = 12 * 1024 * 1024;
+
 const assetOptions = [
   "/assets/veg-thali.png",
   "/assets/nonveg-thali.png",
@@ -35,6 +39,44 @@ export default function ImageUploadField({
 }) {
   const [value, setValue] = useState(defaultValue);
   const [status, setStatus] = useState("");
+  const [processing, setProcessing] = useState(false);
+
+  async function compressImage(file: File) {
+    if (!file.type.startsWith("image/")) {
+      throw new Error("Please choose a JPG, PNG, WebP, or other browser-supported image.");
+    }
+    if (file.size > MAX_SOURCE_BYTES) {
+      throw new Error("The original image must be 12 MB or smaller.");
+    }
+
+    const bitmap = await createImageBitmap(file);
+    let scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(bitmap.width, bitmap.height));
+    let quality = 0.84;
+    let result = "";
+
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) {
+        bitmap.close();
+        throw new Error("This browser could not process the image.");
+      }
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      result = canvas.toDataURL("image/webp", quality);
+      const resultBytes = Math.ceil((result.length - result.indexOf(",") - 1) * 0.75);
+      if (resultBytes <= TARGET_IMAGE_BYTES) {
+        bitmap.close();
+        return { result, width: canvas.width, height: canvas.height, resultBytes };
+      }
+      quality = Math.max(0.52, quality - 0.08);
+      scale *= 0.86;
+    }
+
+    bitmap.close();
+    throw new Error("The image could not be compressed enough. Please use a smaller image.");
+  }
 
   return (
     <div className="image-upload-field">
@@ -71,8 +113,31 @@ export default function ImageUploadField({
             setStatus("");
           }}
         />
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/avif"
+          disabled={processing}
+          onChange={async (event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            setProcessing(true);
+            setStatus("Compressing image…");
+            try {
+              const compressed = await compressImage(file);
+              setValue(compressed.result);
+              setStatus(
+                `Ready: ${compressed.width} × ${compressed.height}, ${Math.round(compressed.resultBytes / 1024)} KB WebP`,
+              );
+            } catch (error) {
+              setStatus(error instanceof Error ? error.message : "Image processing failed.");
+            } finally {
+              setProcessing(false);
+              event.target.value = "";
+            }
+          }}
+        />
         <span className="image-upload-status">
-          Store image paths only. Add new files under public/assets before using them here.
+          Recommended: 1200 × 900 px (4:3). Uploads are automatically resized and compressed.
         </span>
         {status ? <span className="image-upload-status">{status}</span> : null}
       </div>
