@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import FloatingChatButton from "@/components/FloatingChatButton";
 import { PublicNav } from "@/components/PublicShell";
 import { getHomeContent, getSettings } from "@/lib/db";
 
@@ -9,27 +10,34 @@ export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const [homeContent, settings] = await Promise.all([getHomeContent(), getSettings().catch(() => ({} as Record<string, string>))]);
-  const brandIcon = settings.brand_icon_url || "/assets/brand-mark.jpg";
+  const brandLogo = settings.brand_logo_url || settings.brand_icon_url || "/assets/brand-mark.jpg";
+  const portalTitle = settings.brand_portal_title || "Annapoorna";
+  const portalSubtitle = settings.brand_portal_subtitle || "Homemade Fresh Tiffin Service";
+  const whatsappNumber = (settings.business_whatsapp_number || "14034814101").replace(/[^\d]/g, "");
+  const chatMessage = encodeURIComponent(
+    settings.customer_chat_welcome_message || "Hi Annapoorna, I have a question.",
+  );
 
   return (
-    <main className="home-shell">
-      <section className="top-banner">
-        <div className="banner-text">
-          <h1>Annapoorna</h1>
-          <p>Homemade Fresh Tiffin Service</p>
-        </div>
+    <>
+      <main className="home-shell">
+        <section className="top-banner">
+          <div className="banner-text">
+            <h1>{portalTitle}</h1>
+            <p>{portalSubtitle}</p>
+          </div>
 
-        <div className="banner-logo">
-          <Image
-            src={brandIcon}
-            alt="Annapoorna logo"
-            width={120}
-            height={120}
-            unoptimized
-            priority
-          />
-        </div>
-      </section>
+          <div className="banner-logo">
+            <Image
+              src={brandLogo}
+              alt={`${portalTitle} logo`}
+              width={120}
+              height={120}
+              unoptimized
+              priority
+            />
+          </div>
+        </section>
 
       <PublicNav active="home" />
 
@@ -48,14 +56,16 @@ export default async function HomePage() {
               Order Food
             </Link>
 
-            <a
-              href="https://wa.me/"
-              className="outline-button"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Message on WhatsApp
-            </a>
+            {whatsappNumber ? (
+              <a
+                href={`https://wa.me/${whatsappNumber}?text=${chatMessage}`}
+                className="outline-button"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Message on WhatsApp
+              </a>
+            ) : null}
           </div>
         </div>
 
@@ -109,7 +119,9 @@ export default async function HomePage() {
         <span>Homemade Taste</span>
       </section>
 
-      <footer className="home-footer">Annapoorna - Taste of Home</footer>
-    </main>
+        <footer className="home-footer">{portalTitle} - Taste of Home</footer>
+      </main>
+      <FloatingChatButton settings={settings} />
+    </>
   );
 }

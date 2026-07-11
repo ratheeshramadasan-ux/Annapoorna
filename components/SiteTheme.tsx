@@ -45,6 +45,11 @@ function cssUrl(value: string | undefined) {
   return `url("${safe}")`;
 }
 
+function cssColor(value: string | undefined, fallback: string) {
+  const safe = (value ?? "").trim();
+  return /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(safe) ? safe : fallback;
+}
+
 export default async function SiteTheme() {
   const settings = await getSettings().catch(() => ({} as Record<string, string>));
   const font = fontStacks[settings.brand_font_family || ""] || fontStacks.aptos;
@@ -53,14 +58,18 @@ export default async function SiteTheme() {
   const fontScale = Number.isFinite(size) ? Math.min(115, Math.max(90, size)) / 100 : 1;
   const theme = themes[settings.brand_background_theme || "cream_gold"] || themes.cream_gold;
   const backgroundImage = cssUrl(settings.brand_background_image_url);
+  const topBarImage = cssUrl(settings.brand_top_bar_image_url || "/assets/Main Banner.png");
   const brandLogo = cssUrl(settings.brand_icon_url);
+  const backgroundColor = cssColor(settings.brand_background_color, theme["--page-bg"]);
   const declarations = {
     ...theme,
+    "--page-bg": backgroundColor,
     "--font-ui": font,
     "--font-professional": displayFont,
     "--brand-font-scale": String(fontScale),
     "--site-bg-image": backgroundImage || "none",
     "--brand-logo-image": brandLogo || "none",
+    "--top-bar-image": topBarImage || 'url("/assets/Main Banner.png")',
   };
   const css = `:root{${Object.entries(declarations)
     .map(([key, value]) => `${key}:${value}`)

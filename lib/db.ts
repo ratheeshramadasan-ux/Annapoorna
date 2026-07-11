@@ -498,8 +498,16 @@ async function ensureKitchenSchemaOnce() {
     ["brand_display_font", "cambria", "string"],
     ["brand_font_scale", "100", "number"],
     ["brand_background_theme", "cream_gold", "string"],
+    ["brand_background_color", "#f7f4ed", "string"],
     ["brand_background_image_url", "", "string"],
     ["brand_icon_url", "/assets/brand-mark.jpg", "string"],
+    ["brand_logo_url", "/assets/brand-mark.jpg", "string"],
+    ["brand_top_bar_image_url", "/assets/Main Banner.png", "string"],
+    ["brand_portal_title", "Annapoorna", "string"],
+    ["brand_portal_subtitle", "Homemade Fresh Tiffin Service", "string"],
+    ["customer_chat_enabled", "true", "boolean"],
+    ["customer_chat_label", "Chat with us", "string"],
+    ["customer_chat_welcome_message", "Hi Annapoorna, I have a question.", "string"],
     ["payment_edit_second_admin_approval_enabled", "false", "boolean"],
     ["home_menu_lines", defaultHomeContent.menu.join("\\n"), "text"],
     ["home_pickup_lines", defaultHomeContent.pickup.join("\\n"), "text"],
@@ -534,6 +542,10 @@ async function ensureKitchenSchemaOnce() {
             ? "home"
             : key.startsWith("order_") || key === "portal_admin_signature"
               ? "notifications"
+              : key.startsWith("brand_")
+                ? "branding"
+                : key.startsWith("customer_chat_")
+                  ? "chat"
               : "fulfillment",
           key,
         )

@@ -1252,7 +1252,11 @@ export async function submitOrder(formData: FormData) {
     .filter((entry) => entry.quantity > 0);
 
   if (selected.length === 0 && selectedPlans.length === 0) {
-    throw new Error("Please choose at least one menu item.");
+    redirect(
+      `/order?error=${encodeURIComponent(
+        "Please select at least one menu item or thali plan before submitting your order.",
+      )}`,
+    );
   }
   if (selected.some((entry) => entry.item.public_sold_out === 1)) {
     throw new Error("One selected item is sold out. Please update your order.");
@@ -1530,6 +1534,7 @@ export async function submitReview(formData: FormData) {
     .bind(name, rating, comment)
     .run();
   revalidatePath("/reviews");
+  revalidatePath("/admin/reviews");
   redirect("/reviews?submitted=1");
 }
 
@@ -2506,12 +2511,21 @@ export async function updateBrandingSettings(formData: FormData) {
     Math.max(90, Number(formData.get("brand_font_scale") || 100)),
   );
   const settings = [
+    ["brand_portal_title", String(formData.get("brand_portal_title") ?? "Annapoorna"), "string"],
+    [
+      "brand_portal_subtitle",
+      String(formData.get("brand_portal_subtitle") ?? "Homemade Fresh Tiffin Service"),
+      "string",
+    ],
     ["brand_font_family", String(formData.get("brand_font_family") ?? "aptos"), "string"],
     ["brand_display_font", String(formData.get("brand_display_font") ?? "cambria"), "string"],
     ["brand_font_scale", String(Number.isFinite(fontScale) ? fontScale : 100), "number"],
     ["brand_background_theme", String(formData.get("brand_background_theme") ?? "cream_gold"), "string"],
+    ["brand_background_color", String(formData.get("brand_background_color") ?? "#f7f4ed"), "string"],
     ["brand_background_image_url", String(formData.get("brand_background_image_url") ?? ""), "string"],
     ["brand_icon_url", String(formData.get("brand_icon_url") ?? "/assets/brand-mark.jpg"), "string"],
+    ["brand_logo_url", String(formData.get("brand_logo_url") ?? "/assets/brand-mark.jpg"), "string"],
+    ["brand_top_bar_image_url", String(formData.get("brand_top_bar_image_url") ?? "/assets/Main Banner.png"), "string"],
   ];
   for (const [key, value, type] of settings) {
     await db
@@ -2528,7 +2542,42 @@ export async function updateBrandingSettings(formData: FormData) {
   revalidatePath("/reviews");
   revalidatePath("/track-order");
   revalidatePath("/admin/settings");
-  redirect("/admin/settings?saved=branding");
+  redirect("/admin/settings?tab=theme&saved=branding");
+}
+
+export async function updateChatSettings(formData: FormData) {
+  await requireAdminSession();
+  const db = await requireDb();
+  const settings = [
+    ["customer_chat_enabled", formData.get("customer_chat_enabled") === "on" ? "true" : "false", "boolean"],
+    ["customer_chat_label", String(formData.get("customer_chat_label") ?? "Chat with us"), "string"],
+    [
+      "customer_chat_welcome_message",
+      String(formData.get("customer_chat_welcome_message") ?? "Hi Annapoorna, I have a question."),
+      "string",
+    ],
+    [
+      "business_whatsapp_number",
+      String(formData.get("business_whatsapp_number") ?? "").replace(/[^\d]/g, ""),
+      "string",
+    ],
+  ];
+  for (const [key, value, type] of settings) {
+    await db
+      .prepare(
+        `INSERT INTO app_settings (key, value, value_type, category, description, is_public)
+         VALUES (?, ?, ?, 'chat', ?, 1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .bind(key, value, type, key)
+      .run();
+  }
+  revalidatePath("/");
+  revalidatePath("/order");
+  revalidatePath("/reviews");
+  revalidatePath("/track-order");
+  revalidatePath("/admin/settings");
+  redirect("/admin/settings?tab=chat&saved=chat");
 }
 
 export async function updatePaymentApprovalSettings(formData: FormData) {
@@ -2545,7 +2594,7 @@ export async function updatePaymentApprovalSettings(formData: FormData) {
     .run();
   revalidatePath("/admin/settings");
   revalidatePath("/admin/payments");
-  redirect("/admin/settings?saved=payment-approval");
+  redirect("/admin/settings?tab=payments&saved=payment-approval");
 }
 
 export async function updateReviewSettings(formData: FormData) {
@@ -2693,7 +2742,7 @@ export async function updateAdminAlertSettings(formData: FormData) {
   }
 
   revalidatePath("/admin/settings");
-  redirect("/admin/settings?saved=alerts");
+  redirect("/admin/settings?tab=alerts&saved=alerts");
 }
 
 export async function updateOrderNotificationSettings(formData: FormData) {
@@ -2744,7 +2793,7 @@ export async function updateOrderNotificationSettings(formData: FormData) {
   }
 
   revalidatePath("/admin/settings");
-  redirect("/admin/settings?saved=order-messages");
+  redirect("/admin/settings?tab=messages&saved=order-messages");
 }
 
 export async function createHoliday(formData: FormData) {

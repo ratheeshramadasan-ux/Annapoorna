@@ -1,4 +1,5 @@
 import Link from "next/link";
+import FloatingChatButton from "@/components/FloatingChatButton";
 import { getSettings } from "@/lib/db";
 
 type PublicShellProps = {
@@ -38,27 +39,32 @@ export default async function PublicShell({
   children,
 }: PublicShellProps) {
   const settings = await getSettings().catch(() => ({} as Record<string, string>));
-  const brandIcon = settings.brand_icon_url || "/assets/brand-mark.jpg";
+  const brandLogo = settings.brand_logo_url || settings.brand_icon_url || "/assets/brand-mark.jpg";
+  const portalTitle = settings.brand_portal_title || "Annapoorna";
+  const portalSubtitle = settings.brand_portal_subtitle || "Homemade Fresh Tiffin Service";
   return (
-    <main className="home-shell">
-      <section className="top-banner compact-banner">
-        <div className="banner-text">
-          <h1>Annapoorna</h1>
-          <p>Homemade Fresh Tiffin Service</p>
-        </div>
-        <div className="banner-logo">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={brandIcon} alt="Annapoorna logo" />
-        </div>
-      </section>
-      <PublicNav active={active} />
-      {title ? (
-        <header className="page-heading">
-          {eyebrow ? <p>{eyebrow}</p> : null}
-          <h2>{title}</h2>
-        </header>
-      ) : null}
-      {children}
-    </main>
+    <>
+      <main className="home-shell">
+        <section className="top-banner compact-banner">
+          <div className="banner-text">
+            <h1>{portalTitle}</h1>
+            <p>{portalSubtitle}</p>
+          </div>
+          <div className="banner-logo">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={brandLogo} alt={`${portalTitle} logo`} />
+          </div>
+        </section>
+        <PublicNav active={active} />
+        {title ? (
+          <header className="page-heading">
+            {eyebrow ? <p>{eyebrow}</p> : null}
+            <h2>{title}</h2>
+          </header>
+        ) : null}
+        {children}
+      </main>
+      <FloatingChatButton settings={settings} />
+    </>
   );
 }

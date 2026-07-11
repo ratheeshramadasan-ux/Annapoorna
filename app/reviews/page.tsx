@@ -1,4 +1,4 @@
-import { requestReviewToken, submitVerifiedReview } from "@/app/actions";
+import { requestReviewToken, submitReview, submitVerifiedReview } from "@/app/actions";
 import PublicShell from "@/components/PublicShell";
 import { getApprovedReviews, getSettings, settingBool } from "@/lib/db";
 
@@ -92,11 +92,40 @@ export default async function ReviewsPage({
         </div>
         {reviewsEnabled ? (
           <div className="review-verify-stack">
-            <form action={requestReviewToken} className="form-panel">
-              <h3>Verify your order</h3>
+            <form action={submitReview} className="form-panel">
+              <h3>Write a review</h3>
               <p>
-                Reviews can only be submitted by customers with a matching order
-                number and email or phone.
+                Share your experience directly. Reviews are shown publicly after
+                admin approval.
+              </p>
+              <label>
+                Name
+                <input name="customer_name" required />
+              </label>
+              <label>
+                Rating
+                <select name="rating" defaultValue="5" required>
+                  <option value="5">5 stars</option>
+                  <option value="4">4 stars</option>
+                  <option value="3">3 stars</option>
+                  <option value="2">2 stars</option>
+                  <option value="1">1 star</option>
+                </select>
+              </label>
+              <label>
+                Comment
+                <textarea name="comment" rows={5} required />
+              </label>
+              <button className="gold-button" type="submit">
+                Submit Review
+              </button>
+            </form>
+
+            <form action={requestReviewToken} className="form-panel">
+              <h3>Verify by order number</h3>
+              <p>
+                Optional: if you want the review marked as a verified customer,
+                request a code using your order number and contact.
               </p>
               <label>
                 Order number
@@ -125,27 +154,27 @@ export default async function ReviewsPage({
                 Review code
                 <input name="review_token" inputMode="numeric" required />
               </label>
-            <label>
-              Name
-              <input name="customer_name" required />
-            </label>
-            <label>
-              Rating
-              <select name="rating" defaultValue="5" required>
-                <option value="5">5 stars</option>
-                <option value="4">4 stars</option>
-                <option value="3">3 stars</option>
-                <option value="2">2 stars</option>
-                <option value="1">1 star</option>
-              </select>
-            </label>
-            <label>
-              Comment
-              <textarea name="comment" rows={5} required />
-            </label>
-            <button className="gold-button" type="submit">
-              Submit Review
-            </button>
+              <label>
+                Name
+                <input name="customer_name" required />
+              </label>
+              <label>
+                Rating
+                <select name="rating" defaultValue="5" required>
+                  <option value="5">5 stars</option>
+                  <option value="4">4 stars</option>
+                  <option value="3">3 stars</option>
+                  <option value="2">2 stars</option>
+                  <option value="1">1 star</option>
+                </select>
+              </label>
+              <label>
+                Comment
+                <textarea name="comment" rows={5} required />
+              </label>
+              <button className="gold-button" type="submit">
+                Submit Verified Review
+              </button>
             </form>
           </div>
         ) : (

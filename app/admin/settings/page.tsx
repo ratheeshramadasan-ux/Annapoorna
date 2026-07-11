@@ -1,6 +1,7 @@
 import {
   updateBrandingSettings,
   updateAdminAlertSettings,
+  updateChatSettings,
   updateDeliverySettings,
   updateHomeContent,
   updateOrderNotificationSettings,
@@ -10,6 +11,7 @@ import {
 } from "@/app/actions";
 import AdminShell from "@/components/AdminShell";
 import DataTable from "@/components/DataTable";
+import ImageUploadField from "@/components/ImageUploadField";
 import { requireAdminSession } from "@/lib/auth";
 import { all, ensureKitchenSchema } from "@/lib/db";
 
@@ -33,14 +35,33 @@ type AdminAlertRow = {
   whatsapp_alert_enabled: number | null;
 };
 
+const settingsTabs = [
+  { key: "theme", label: "Theme" },
+  { key: "chat", label: "Chat" },
+  { key: "delivery", label: "Delivery" },
+  { key: "payments", label: "Payments" },
+  { key: "reviews", label: "Reviews" },
+  { key: "alerts", label: "Alerts" },
+  { key: "messages", label: "Messages" },
+  { key: "home", label: "Home Content" },
+  { key: "advanced", label: "Advanced" },
+] as const;
+
+type SettingsTab = (typeof settingsTabs)[number]["key"];
+
+function normalizeSettingsTab(value?: string): SettingsTab {
+  return settingsTabs.some((tab) => tab.key === value) ? (value as SettingsTab) : "theme";
+}
+
 export default async function AdminSettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ saved?: string }>;
+  searchParams: Promise<{ saved?: string; tab?: string }>;
 }) {
   await requireAdminSession();
   await ensureKitchenSchema();
   const params = await searchParams;
+  const activeTab = normalizeSettingsTab(params.tab);
   const rows = await all<SettingRow>(
     "SELECT key, value, value_type, category, is_public FROM app_settings ORDER BY category, key",
   );
@@ -80,14 +101,43 @@ export default async function AdminSettingsPage({
       {params.saved === "branding" ? (
         <p className="admin-flash">Brand customization saved successfully.</p>
       ) : null}
+      {params.saved === "chat" ? (
+        <p className="admin-flash">Customer chat settings saved successfully.</p>
+      ) : null}
       {params.saved === "payment-approval" ? (
         <p className="admin-flash">Payment approval settings saved successfully.</p>
       ) : null}
+      <nav className="settings-submenu" aria-label="Settings sections">
+        {settingsTabs.map((tab) => (
+          <a
+            key={tab.key}
+            href={`/admin/settings?tab=${tab.key}`}
+            className={activeTab === tab.key ? "active" : undefined}
+          >
+            {tab.label}
+          </a>
+        ))}
+      </nav>
+      {activeTab === "theme" ? (
       <form action={updateBrandingSettings} className="delivery-settings-card branding-settings-card">
         <div>
-          <h3>Brand Customization</h3>
-          <p>Control the public site font, scale, background, and icon branding.</p>
+          <h3>Portal Theme / Look & Feel</h3>
+          <p>Customize the portal title, top bar image, logo, colors, background, fonts, and icon.</p>
         </div>
+        <label>
+          Top bar title
+          <input
+            name="brand_portal_title"
+            defaultValue={valueOrDefault("brand_portal_title", "Annapoorna")}
+          />
+        </label>
+        <label>
+          Top bar subtitle
+          <input
+            name="brand_portal_subtitle"
+            defaultValue={valueOrDefault("brand_portal_subtitle", "Homemade Fresh Tiffin Service")}
+          />
+        </label>
         <label>
           Body font
           <select name="brand_font_family" defaultValue={valueOrDefault("brand_font_family", "aptos")}>
@@ -118,6 +168,14 @@ export default async function AdminSettingsPage({
           />
         </label>
         <label>
+          Background color
+          <input
+            name="brand_background_color"
+            type="color"
+            defaultValue={valueOrDefault("brand_background_color", "#f7f4ed")}
+          />
+        </label>
+        <label>
           Theme
           <select name="brand_background_theme" defaultValue={valueOrDefault("brand_background_theme", "cream_gold")}>
             <option value="cream_gold">Cream and gold</option>
@@ -125,24 +183,85 @@ export default async function AdminSettingsPage({
             <option value="graphite">Graphite</option>
           </select>
         </label>
-        <label className="wide-field">
-          Background image URL
-          <input
-            name="brand_background_image_url"
-            placeholder="/assets/Main Banner.png"
-            defaultValue={valueFor("brand_background_image_url")}
-          />
-        </label>
-        <label className="wide-field">
-          Icon branding URL
-          <input
-            name="brand_icon_url"
-            placeholder="/assets/brand-mark.jpg"
-            defaultValue={valueOrDefault("brand_icon_url", "/assets/brand-mark.jpg")}
-          />
-        </label>
+        <div className="wide-field branding-image-grid">
+          <div className="form-field">
+            <span>Top bar image</span>
+            <ImageUploadField
+              name="brand_top_bar_image_url"
+              defaultValue={valueOrDefault("brand_top_bar_image_url", "/assets/Main Banner.png")}
+              label="Top bar image"
+            />
+          </div>
+          <div className="form-field">
+            <span>Brand logo</span>
+            <ImageUploadField
+              name="brand_logo_url"
+              defaultValue={valueOrDefault("brand_logo_url", "/assets/brand-mark.jpg")}
+              label="Brand logo"
+            />
+          </div>
+          <div className="form-field">
+            <span>Small icon</span>
+            <ImageUploadField
+              name="brand_icon_url"
+              defaultValue={valueOrDefault("brand_icon_url", "/assets/brand-mark.jpg")}
+              label="Small icon"
+            />
+          </div>
+          <div className="form-field">
+            <span>Page background image</span>
+            <ImageUploadField
+              name="brand_background_image_url"
+              defaultValue={valueFor("brand_background_image_url")}
+              label="Background image"
+            />
+          </div>
+        </div>
         <button type="submit">Save customization</button>
       </form>
+      ) : null}
+      {activeTab === "chat" ? (
+      <form action={updateChatSettings} className="delivery-settings-card chat-settings-card">
+        <div>
+          <h3>Customer Chat</h3>
+          <p>Add a floating public chat button so customers can directly message you on WhatsApp.</p>
+        </div>
+        <label className="checkbox-line">
+          <input
+            name="customer_chat_enabled"
+            type="checkbox"
+            defaultChecked={valueFor("customer_chat_enabled") !== "false"}
+          />
+          Show chat button
+        </label>
+        <label>
+          Button label
+          <input
+            name="customer_chat_label"
+            defaultValue={valueOrDefault("customer_chat_label", "Chat with us")}
+          />
+        </label>
+        <label>
+          WhatsApp number
+          <input
+            name="business_whatsapp_number"
+            inputMode="tel"
+            placeholder="14034814101"
+            defaultValue={valueOrDefault("business_whatsapp_number", "14034814101")}
+          />
+        </label>
+        <label className="wide-field">
+          Default chat message
+          <textarea
+            name="customer_chat_welcome_message"
+            rows={3}
+            defaultValue={valueOrDefault("customer_chat_welcome_message", "Hi Annapoorna, I have a question.")}
+          />
+        </label>
+        <button type="submit">Save chat settings</button>
+      </form>
+      ) : null}
+      {activeTab === "delivery" ? (
       <form action={updateDeliverySettings} className="delivery-settings-card">
         <div>
           <h3>Delivery Settings</h3>
@@ -175,7 +294,9 @@ export default async function AdminSettingsPage({
         </label>
         <button type="submit">Save delivery settings</button>
       </form>
+      ) : null}
 
+      {activeTab === "payments" ? (
       <form action={updatePaymentApprovalSettings} className="delivery-settings-card">
         <div>
           <h3>Payment Edit Approval</h3>
@@ -191,7 +312,9 @@ export default async function AdminSettingsPage({
         </label>
         <button type="submit">Save payment approval</button>
       </form>
+      ) : null}
 
+      {activeTab === "reviews" ? (
       <form action={updateReviewSettings} className="delivery-settings-card">
         <div>
           <h3>Review Settings</h3>
@@ -240,7 +363,9 @@ export default async function AdminSettingsPage({
         </label>
         <button type="submit">Save review settings</button>
       </form>
+      ) : null}
 
+      {activeTab === "alerts" ? (
       <form action={updateAdminAlertSettings} className="delivery-settings-card admin-alert-settings">
         <div>
           <h3>Admin Order Alerts</h3>
@@ -283,7 +408,9 @@ export default async function AdminSettingsPage({
         </div>
         <button type="submit">Save admin alerts</button>
       </form>
+      ) : null}
 
+      {activeTab === "messages" ? (
       <form action={updateOrderNotificationSettings} className="delivery-settings-card message-template-card">
         <div>
           <h3>Order Messages</h3>
@@ -342,7 +469,9 @@ export default async function AdminSettingsPage({
         </label>
         <button type="submit">Save order messages</button>
       </form>
+      ) : null}
 
+      {activeTab === "home" ? (
       <form action={updateHomeContent} className="delivery-settings-card home-content-card">
         <div>
           <h3>Home Page Content</h3>
@@ -377,7 +506,9 @@ export default async function AdminSettingsPage({
         </label>
         <button type="submit">Save home content</button>
       </form>
+      ) : null}
 
+      {activeTab === "advanced" ? (
       <DataTable
         headers={["Key", "Value", "Type", "Category", "Public", "Edit"]}
         rows={rows.map((setting) => [
@@ -400,6 +531,7 @@ export default async function AdminSettingsPage({
           </form>,
         ])}
       />
+      ) : null}
     </AdminShell>
   );
 }

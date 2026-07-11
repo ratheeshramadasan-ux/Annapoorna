@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { submitOrder } from "@/app/actions";
 import { formatMoney, formatPickupDate } from "@/lib/format";
 import {
@@ -160,7 +160,9 @@ export default function OrderForm({
   const [planQuantities, setPlanQuantities] = useState<Record<number, number>>({});
   const [slotId, setSlotId] = useState(String(pickupSlots[0]?.id ?? ""));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [menuSelectionError, setMenuSelectionError] = useState("");
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
+  const menuErrorRef = useRef<HTMLDivElement | null>(null);
   const submissionToken = useRef(
     globalThis.crypto?.randomUUID?.() ??
       `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -315,6 +317,12 @@ export default function OrderForm({
     visiblePlans,
   ]);
 
+  useEffect(() => {
+    if (summary.lines.length > 0 && menuSelectionError) {
+      setMenuSelectionError("");
+    }
+  }, [menuSelectionError, summary.lines.length]);
+
   function selectOrderType(type: OrderType) {
     setOrderType(type);
   }
@@ -335,11 +343,26 @@ export default function OrderForm({
       [nextIndex]?.focus();
   }
 
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    if (summary.lines.length === 0) {
+      event.preventDefault();
+      setIsSubmitting(false);
+      setMenuSelectionError("Please select at least one menu item or thali plan before submitting your order.");
+      requestAnimationFrame(() => {
+        menuErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        menuErrorRef.current?.focus();
+      });
+      return;
+    }
+    setMenuSelectionError("");
+    setIsSubmitting(true);
+  }
+
   return (
     <form
       action={submitOrder}
       className="step-order-form"
-      onSubmit={() => setIsSubmitting(true)}
+      onSubmit={handleSubmit}
     >
       <input type="hidden" name="submission_token" value={submissionToken.current} />
       <input type="hidden" name="order_type" value={orderType} />
@@ -545,44 +568,27 @@ export default function OrderForm({
           </section>
         </div>
 
-        <aside className="checkout-panel order-summary-panel">
-          <p>Step 5</p>
-          <h3>Summary</h3>
-          <div className="line-list">
-            <div>
-              <span>Order type</span>
-              <strong>{orderType}</strong>
-            </div>
-            <div>
-              <span>Date</span>
-              <strong>{formatPickupDate(selectedDate)}</strong>
-            </div>
-            <div>
-              <span>Fulfillment</span>
-              <strong>{fulfillment}</strong>
-            </div>
-            {summary.lines.map((line) => (
-              <div key={line.id}>
-                <span>
-                  {line.quantity} x {line.name}
-                </span>
-                <strong>{formatMoney(line.quantity * line.price)}</strong>
-              </div>
-            ))}
-          </div>
-          <div className="order-total">
-            <span>Total amount</span>
-            <strong>{formatMoney(summary.total)}</strong>
-          </div>
-          <button className="gold-button full-button" type="submit" disabled={isSubmitting || Boolean(selectedHoliday)}>
-            {isSubmitting ? "Submitting..." : "Submit Order"}
-          </button>
-          <p className="fine-print">Orders are created as pending for confirmation.</p>
-        </aside>
-
         <section className="order-step menu-order-step">
           <p>Step 6</p>
           <h3>Available menu</h3>
+          <div className="menu-date-note">
+            <strong>Menu changes by date.</strong>
+            <span>
+              We prepare different items on different days, so this list only shows what is available for{" "}
+              {formatPickupDate(selectedDate)}. If you do not see something you like, try another date or order type.
+            </span>
+          </div>
+          {menuSelectionError ? (
+            <div
+              ref={menuErrorRef}
+              className="themed-inline-alert"
+              role="alert"
+              tabIndex={-1}
+            >
+              <strong>Menu selection required</strong>
+              <span>{menuSelectionError}</span>
+            </div>
+          ) : null}
           {showPlans && visiblePlans.length > 0 ? (
             <div className="menu-section">
               <div className="section-title">
@@ -733,6 +739,53 @@ export default function OrderForm({
             </div>
           ) : null}
         </section>
+
+        <aside className="checkout-panel order-summary-panel">
+          <p>Step 7</p>
+          <h3>Summary & Submit</h3>
+          {menuSelectionError ? (
+            <div className="summary-inline-alert" role="alert">
+              {menuSelectionError}
+            </div>
+          ) : null}
+          <div className="line-list">
+            <div>
+              <span>Order type</span>
+              <strong>{orderType}</strong>
+            </div>
+            <div>
+              <span>Date</span>
+              <strong>{formatPickupDate(selectedDate)}</strong>
+            </div>
+            <div>
+              <span>Fulfillment</span>
+              <strong>{fulfillment}</strong>
+            </div>
+            {summary.lines.length > 0 ? (
+              summary.lines.map((line) => (
+                <div key={line.id}>
+                  <span>
+                    {line.quantity} x {line.name}
+                  </span>
+                  <strong>{formatMoney(line.quantity * line.price)}</strong>
+                </div>
+              ))
+            ) : (
+              <div>
+                <span>No menu selected yet</span>
+                <strong>Choose from Step 6</strong>
+              </div>
+            )}
+          </div>
+          <div className="order-total">
+            <span>Total amount</span>
+            <strong>{formatMoney(summary.total)}</strong>
+          </div>
+          <button className="gold-button full-button" type="submit" disabled={isSubmitting || Boolean(selectedHoliday)}>
+            {isSubmitting ? "Submitting..." : "Submit Order"}
+          </button>
+          <p className="fine-print">Orders are created as pending for confirmation.</p>
+        </aside>
       </div>
     </form>
   );

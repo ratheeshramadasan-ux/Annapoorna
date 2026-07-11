@@ -7,6 +7,8 @@ const TARGET_IMAGE_BYTES = 150 * 1024;
 const MAX_SOURCE_BYTES = 12 * 1024 * 1024;
 
 const assetOptions = [
+  "/assets/Main Banner.png",
+  "/assets/brand-mark.jpg",
   "/assets/veg-thali.png",
   "/assets/nonveg-thali.png",
   "/assets/Butter Chicken.png",

@@ -1,0 +1,20 @@
+
+> annapoorna-website@0.1.0 dev
+> next dev -p 3100
+
+   ▲ Next.js 15.5.18
+   - Local:        http://localhost:3100
+   - Network:      http://192.168.1.91:3100
+   - Experiments (use with caution):
+     · serverActions
+
+ ✓ Starting...
+ ✓ Ready in 1156ms
+ ○ Compiling /order ...
+ ✓ Compiled /order in 1750ms (732 modules)
+ GET /order 200 in 2087ms
+ ✓ Compiled / in 259ms (764 modules)
+ GET / 200 in 455ms
+ GET /order 200 in 84ms
+ ✓ Compiled /reviews in 217ms (798 modules)
+ GET /reviews 200 in 442ms
